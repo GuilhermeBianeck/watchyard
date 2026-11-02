@@ -22,13 +22,18 @@ if not runtime.exists():
 python = runtime/'bin/python'
 subprocess.run([str(python),'-m','pip','install','--no-deps','--no-build-isolation','--force-reinstall',str(root)],check=True)
 logs = data/'logs'; logs.mkdir(exist_ok=True)
+gateway = data/'gateway.cjs'
+shutil.copyfile(root/'watchyard/gateway.cjs',gateway)
+node = shutil.which('node')
+if not node:
+    raise RuntimeError('Node.js is required for the home-network web gateway.')
 agents = Path.home()/'Library/LaunchAgents'; agents.mkdir(exist_ok=True)
 plist = agents/'com.watchyard.server.plist'
 payload = {
     'Label':'com.watchyard.server',
     'ProgramArguments':['/usr/bin/caffeinate','-i','-s',str(python),'-m','watchyard.app'],
     'WorkingDirectory':str(data),
-    'EnvironmentVariables':{'PATH':'/opt/homebrew/bin:/usr/bin:/bin','WATCHYARD_DATA':str(data),'TZ':'Europe/Lisbon','PYTHONUNBUFFERED':'1','YOLO_AUTOINSTALL':'false','OMP_NUM_THREADS':'2'},
+    'EnvironmentVariables':{'PATH':'/opt/homebrew/bin:/usr/bin:/bin','WATCHYARD_DATA':str(data),'TZ':'Europe/Lisbon','PYTHONUNBUFFERED':'1','YOLO_AUTOINSTALL':'false','OMP_NUM_THREADS':'2','WATCHYARD_GATEWAY':'1'},
     'RunAtLoad':True,'KeepAlive':True,'ThrottleInterval':15,
     'StandardOutPath':str(logs/'server.log'),'StandardErrorPath':str(logs/'server-error.log'),
     'ProcessType':'Background',
@@ -36,5 +41,14 @@ payload = {
 plist.write_bytes(plistlib.dumps(payload))
 target=f'gui/{os.getuid()}'
 subprocess.run(['launchctl','bootout',target,str(plist)],capture_output=True)
+gateway_plist = agents/'com.watchyard.gateway.plist'
+gateway_payload = {
+    'Label':'com.watchyard.gateway', 'ProgramArguments':[node,str(gateway)],
+    'WorkingDirectory':str(data), 'RunAtLoad':True, 'KeepAlive':True, 'ThrottleInterval':15,
+    'StandardOutPath':str(logs/'gateway.log'), 'StandardErrorPath':str(logs/'gateway-error.log'),
+}
+gateway_plist.write_bytes(plistlib.dumps(gateway_payload))
+subprocess.run(['launchctl','bootout',target,str(gateway_plist)],capture_output=True)
 subprocess.run(['launchctl','bootstrap',target,str(plist)],check=True)
+subprocess.run(['launchctl','bootstrap',target,str(gateway_plist)],check=True)
 print('Installed Watchyard LaunchAgent. Dashboard: http://127.0.0.1:8765')

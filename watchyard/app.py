@@ -1,15 +1,19 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
+import ipaddress
+import socket
+import subprocess
 import time
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .config import Settings
 from .service import Service
+from .access import Access, lan_address, lan_network
 
 STATIC = Path(__file__).parent/'static'
 
@@ -20,6 +24,10 @@ class Controls(BaseModel):
     confidence: float | None = Field(None,ge=0.25,le=0.95)
 
 
+class Login(BaseModel):
+    code: str = Field(min_length=1,max_length=64)
+
+
 class CameraUpdate(BaseModel):
     enabled: bool
     labels: list[str]
@@ -28,6 +36,14 @@ class CameraUpdate(BaseModel):
 
 def create_app(service=None, run_service=True):
     service = service or Service(Settings())
+    access = Access(service.settings)
+    address = lan_address()
+    home = lan_network(address)
+    hostname = socket.gethostname().lower()
+    try:
+        bonjour = subprocess.check_output(['/usr/sbin/scutil','--get','LocalHostName'],text=True,timeout=2).strip().lower()+'.local'
+    except (OSError,subprocess.SubprocessError):
+        bonjour = hostname.split('.')[0]+'.local'
 
     @asynccontextmanager
     async def lifespan(app):
@@ -37,12 +53,22 @@ def create_app(service=None, run_service=True):
         if run_service:
             service.close()
 
-    app = FastAPI(title='Watchyard',version='0.1.0',lifespan=lifespan,docs_url=None,redoc_url=None)
+    app = FastAPI(title='Watchyard',version='0.2.0',lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
     app.state.service = service
-    app.add_middleware(TrustedHostMiddleware,allowed_hosts=['localhost','127.0.0.1','testserver'])
+    app.add_middleware(TrustedHostMiddleware,allowed_hosts=['localhost','127.0.0.1','testserver',address,hostname,hostname.split('.')[0]+'.local',bonjour])
 
     @app.middleware('http')
     async def secure_local(request: Request, call_next):
+        client = request.client.host
+        if not access.local(client):
+            try:
+                ip = ipaddress.ip_address(client)
+                if ip not in home:
+                    return Response('Home network access only',status_code=403)
+            except ValueError:
+                return Response('Home network access only',status_code=403)
+        if request.url.path.startswith('/api/') and request.url.path not in ('/api/session','/api/login') and not access.authenticated(request):
+            return JSONResponse({'detail':'Sign in with your dashboard code'},status_code=401)
         if request.method not in ('GET','HEAD','OPTIONS'):
             if request.headers.get('x-watchyard-client') != 'dashboard':
                 return Response('Dashboard request required',status_code=403)
@@ -53,12 +79,32 @@ def create_app(service=None, run_service=True):
         response.headers['Cache-Control'] = 'no-store'
         response.headers['X-Content-Type-Options'] = 'nosniff'
         response.headers['X-Frame-Options'] = 'DENY'
-        response.headers['Content-Security-Policy'] = "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; frame-ancestors 'none'; base-uri 'self'"
+        response.headers['Referrer-Policy'] = 'no-referrer'
+        response.headers['Content-Security-Policy'] = "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
         return response
 
     @app.get('/')
     def index():
         return FileResponse(STATIC/'index.html')
+
+    @app.get('/api/session')
+    def session(request: Request):
+        return {'authenticated':access.authenticated(request),'local':access.local(request.client.host)}
+
+    @app.post('/api/login')
+    def login(data: Login, request: Request):
+        token, status = access.login(data.code.strip().replace(' ',''),request.client.host)
+        if not token:
+            raise HTTPException(status,'Try again in five minutes' if status==429 else 'Incorrect dashboard code')
+        response = JSONResponse({'ok':True})
+        response.set_cookie(access.cookie,token,max_age=30*86400,httponly=True,samesite='strict',secure=request.url.scheme=='https')
+        return response
+
+    @app.post('/api/logout')
+    def logout():
+        response = JSONResponse({'ok':True})
+        response.delete_cookie(access.cookie)
+        return response
 
     @app.get('/api/status')
     def status():
@@ -136,9 +182,11 @@ def create_app(service=None, run_service=True):
 
 def main():
     import logging
+    import os
     import uvicorn
     logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(name)s %(message)s')
-    uvicorn.run(create_app(),host='127.0.0.1',port=8765,access_log=False)
+    gateway = os.environ.get('WATCHYARD_GATEWAY') == '1'
+    uvicorn.run(create_app(),host='127.0.0.1' if gateway else '0.0.0.0',port=8766 if gateway else 8765,access_log=False,proxy_headers=gateway,forwarded_allow_ips='127.0.0.1')
 
 
 if __name__ == '__main__':

@@ -16,8 +16,8 @@ Reduce irrelevant motion notifications from four locally connected NVR cameras w
 9. Provide a local dashboard with four live snapshots, health, event history, rules, mute and test notification.
 10. Report camera disconnection and recovery when the Telegram connection is available.
 11. Start at user login, recover from process failure, and expose a truthful health endpoint.
-12. Keep credentials and images outside Git; bind the dashboard to loopback and reject foreign Host and Origin changes.
+12. Keep credentials and images outside Git; serve the dashboard on the home network with device sign-in; keep Python on loopback and reject foreign Host, Origin and subnet access.
 
 ## Acceptance and boundaries
 
-The application is ready for an initial pilot when all four streams are fresh, the detector runs successfully on each, the verified chat receives a test snapshot, event rules and access controls pass automated tests, and a person can test a walk-through. Record day/night precision, missed events, resource use and user feedback before relying on the system. Push delivery is best effort; it is not a certified alarm. Continuous recording remains on the NVR. No facial recognition, external access to the dashboard, audio analysis or generative model is included in this release.
+The application is ready for an initial pilot when all four streams are fresh, the detector runs successfully on each, the verified chat receives a test snapshot, event rules and access controls pass automated tests, and a person can test a walk-through. Record day/night precision, missed events, resource use and user feedback before relying on the system. Push delivery is best effort; it is not a certified alarm. Continuous recording remains on the NVR. No facial recognition, internet access to the dashboard, audio analysis or generative model is included in this release.

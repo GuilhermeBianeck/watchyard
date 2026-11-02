@@ -4,9 +4,9 @@ Local camera monitoring for an Apple Silicon Mac, with Telegram alerts for peopl
 
 ## Current deployment
 
-The dashboard runs on the Mac at http://127.0.0.1:8765. Four NVR substreams are decoded with FFmpeg and analysed locally with YOLO11 nano and Core ML. Notifications and selected snapshots go to a paired Telegram chat. Detection and event snapshots stay on the Mac; Telegram receives the alerts and images sent to it. Telegram bot chats are not end-to-end encrypted.
+The dashboard runs on the Mac at http://127.0.0.1:8765 and on the home Wi-Fi using the Mac’s IP address with port 8765. Mobile devices sign in with an eight-digit dashboard code. Four NVR substreams are decoded with FFmpeg and analysed locally with YOLO11 nano and Core ML. Notifications and selected snapshots go to a paired Telegram chat. Detection and event snapshots stay on the Mac; Telegram receives the alerts and images sent to it. Telegram bot chats are not end-to-end encrypted.
 
-The macOS LaunchAgent starts after login and requests that the Mac stay awake. It needs network access to the NVR and internet for Telegram. A closed lid, logout, power loss or network outage may stop monitoring. The dashboard is only accessible on the Mac. A separate watchdog is needed to notify you if the Mac itself stops.
+The macOS LaunchAgent starts after login and requests that the Mac stay awake. It needs network access to the NVR and internet for Telegram. A closed lid, logout, power loss or network outage may stop monitoring. A small Node.js gateway serves the dashboard on home Wi-Fi; the Python service stays on loopback. A separate watchdog is needed to notify you if the Mac itself stops.
 
 ## Use
 
@@ -14,12 +14,13 @@ Open the dashboard to view cameras, inspect events, set alert zones and mute not
 
 ## Setup on macOS
 
-Requires Apple Silicon, Python 3.11, FFmpeg, a local RTSP NVR and a Telegram bot. Run from the repository:
+Requires Apple Silicon, Python 3.11, Node.js 18+, FFmpeg, a local RTSP NVR and a Telegram bot. Run from the repository:
 
 ```sh
 python3.11 -m venv .venv
 .venv/bin/python -m pip install '.[test]'
 .venv/bin/python scripts/configure.py
+.venv/bin/python scripts/dashboard_code.py
 .venv/bin/python scripts/prepare_model.py
 .venv/bin/python scripts/install_service.py
 ```
@@ -27,6 +28,26 @@ python3.11 -m venv .venv
 The configuration script prompts for credentials and creates an owner-only secrets file under `~/Library/Application Support/Watchyard`. Pair the bot using the displayed private-chat command. Do not commit credentials or event images. The model download and Python packages require internet; camera inference remains local.
 
 Check `sh scripts/service.sh status`; use `restart`, `stop` or `start` with the same script. Logs and data are in `~/Library/Application Support/Watchyard`. Stop monitoring by running `sh scripts/service.sh stop`; this preserves the data and service configuration.
+
+## iPhone access
+
+Connect your iPhone to the same home Wi-Fi as the Mac. In Safari, open
+`http://<Mac-IP>:8765` and enter the dashboard code. Safari’s Share menu can add
+it to the Home Screen, with a dedicated icon. The Home, Activity and Settings
+tabs adapt to iPhone, iPad and desktop. Appearance follows your device.
+Camera pictures refresh every three seconds; these are previews rather than
+continuous video. Tap a camera for an expanded view or its settings icon to
+edit an alert area.
+
+The code is separate from your NVR password. Sessions last 30 days. Sign out in
+Settings, or reset the code and revoke all sessions using
+`.venv/bin/python scripts/dashboard_code.py`, then restart the service. Keep the
+code private. The interface uses HTTP on your trusted home Wi-Fi, not TLS; do
+not forward its port to the internet. Other devices cannot fetch camera data
+without signing in, and clients outside the home subnet are rejected. The Mac's
+loopback address retains direct local access. If the Mac’s IP or network changes,
+restart Watchyard to refresh the host/subnet allowlist. Guest Wi-Fi isolation or
+a firewall rule may prevent mobile access.
 
 ## Tests and limitations
 

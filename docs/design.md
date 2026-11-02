@@ -1,18 +1,22 @@
-# Dashboard design
+# iPhone and local dashboard design
 
-Purpose: review four home camera views, understand why an alert was sent, and adjust its area.
+Purpose: glance at four cameras at home, review recent events, and adjust alerts.
 
-Palette: harbor ink #17324a, sea blue #356f9d, pale mist #eef4f5, paper #ffffff,
-fern #3a765d, rust #a64f3b. No external fonts or assets; use the native macOS/iOS
-system typeface with a restrained scale (34/24/18/14 px).
+Tokens: iOS grouped background #f2f2f7, paper #ffffff, ink #1c1c1e, secondary
+#6c6c70, system blue #0066d6, status green #248a3d. Dark appearance follows the
+device. Native Apple system typography, 34 pt large mobile titles, 17 pt camera
+names, 13 pt supporting text. Self-contained assets; no external font requests.
 
-Layout: left-aligned title and connection state, wide 2-by-2 camera mosaic,
-narrow alert-control column, then a chronological event list. On mobile the
-controls precede a single-column camera list. The actual camera views carry the
-visual identity; decorative charts and generic statistic cards add no value.
+Home puts camera imagery first. A quiet monitoring row establishes current
+status, followed by the four previews and two alert shortcuts. Activity groups
+real events by date. Settings uses grouped rows and switches. The three sections
+are persistent tabs on iPhone and a sidebar on desktop. Floating translucent
+navigation is reserved for these controls; camera imagery has a solid surface.
 
-The sole strong visual gesture is a substantial blue header that frames the
-camera mosaic like a home monitoring console. Keep everything else quiet.
-Zones are drawn on the real camera picture. Controls describe their effect:
-Mute 1 hour, Resume alerts, Edit area. Readiness distinguishes camera connection,
-detector health and Telegram pairing. No simulated events or fabricated data.
+The initial layout was reviewed against a generic SaaS dashboard: removed large
+statistics, greeting copy, side-by-side mobile control panels and decorative
+status cards. The camera mosaic, familiar place names and zone editor carry the
+identity. Previews are labelled as periodically refreshed pictures, not live
+video. Expanded camera views continue refreshing. Touch areas are at least
+44px for primary controls, safe areas are respected, and motion is reduced when
+requested. Sign-in does not disclose camera names or images before pairing.

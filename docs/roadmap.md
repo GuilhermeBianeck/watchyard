@@ -17,7 +17,7 @@ As a homeowner, I want to know when a person, moving vehicle or animal enters a 
 ## M3: Reliability and control — planned
 - Durable offline/recovery notifications, external heartbeat and user-visible delivery diagnostics.
 - Configurable alert severity by camera, object and schedule; robust multi-object tracking and re-identification.
-- Private remote dashboard access and optional short event clips.
+- Home Wi-Fi dashboard access and iPhone layout: implemented in 0.2, with authenticated sessions. Internet/VPN access and short event clips remain planned.
 - Acceptance: recovery and outage scenarios pass documented end-to-end checks without exposing the NVR.
 
 ## M4: Optional enhancements — planned
