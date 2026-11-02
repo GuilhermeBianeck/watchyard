@@ -7,6 +7,7 @@ import socket
 import threading
 import time
 import psutil
+from .runtime import Runtime
 
 
 def lan_address():
@@ -31,6 +32,7 @@ class Access:
 
     def __init__(self, settings):
         self.settings = settings
+        self.runtime = Runtime.read()
         if not settings.secret('DASHBOARD_SESSION_KEY'):
             settings.save_secrets({'DASHBOARD_SESSION_KEY': secrets.token_hex(32)})
         self.key = bytes.fromhex(settings.secret('DASHBOARD_SESSION_KEY'))
@@ -45,7 +47,7 @@ class Access:
         return hmac.new(self.key, value.encode(), hashlib.sha256).hexdigest()
 
     def authenticated(self, request):
-        if self.local(request.client.host):
+        if self.runtime.local_bypass and self.local(request.client.host):
             return True
         token = request.cookies.get(self.cookie, '')
         try:

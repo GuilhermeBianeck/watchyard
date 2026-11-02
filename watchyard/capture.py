@@ -6,6 +6,7 @@ from urllib.parse import quote
 
 import cv2
 import numpy as np
+from .runtime import Runtime
 
 
 class Camera:
@@ -39,9 +40,9 @@ class Camera:
         user = quote(s.secret('NVR_USERNAME', 'admin'), safe='')
         password = quote(s.secret('NVR_PASSWORD', ''), safe='')
         url = f"rtsp://{user}:{password}@{host}:554/Streaming/Channels/{self.id}02"
-        hardware = True
+        hardware = Runtime.read().decoder == 'videotoolbox'
         while not self.stop.is_set():
-            args = [shutil.which('ffmpeg') or '/opt/homebrew/bin/ffmpeg', '-nostdin', '-hide_banner', '-loglevel', 'error', '-rtsp_transport', 'tcp', '-timeout', '10000000']
+            args = [shutil.which('ffmpeg') or 'ffmpeg', '-nostdin', '-hide_banner', '-loglevel', 'error', '-rtsp_transport', 'tcp', '-timeout', '10000000']
             if hardware:
                 args += ['-hwaccel', 'videotoolbox']
             args += ['-i', url, '-an', '-sn', '-vf', f'fps=3,scale={self.WIDTH}:{self.HEIGHT}', '-pix_fmt', 'bgr24', '-f', 'rawvideo', 'pipe:1']

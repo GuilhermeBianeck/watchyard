@@ -4,7 +4,9 @@ import os
 import threading
 from pathlib import Path
 
-DATA = Path(os.environ.get("WATCHYARD_DATA", str(Path.home() / "Library/Application Support/Watchyard")))
+from .runtime import data_directory
+
+DATA = data_directory()
 DEFAULTS = {
     "enabled": True,
     "muted_until": 0,

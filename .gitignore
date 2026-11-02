@@ -19,3 +19,6 @@ build/
 dist/
 
 .venv
+
+deploy/vps/runtime.env
+deploy/vps/data/

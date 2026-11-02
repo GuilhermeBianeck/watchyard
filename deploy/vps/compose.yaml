@@ -1,0 +1,42 @@
+# Future VPS deployment only. Nothing in this file is started by the Mac installer.
+x-common: &common
+  image: watchyard-vps:local
+  build:
+    context: ../..
+    dockerfile: deploy/vps/Dockerfile
+  env_file: ${WATCHYARD_ENV_FILE:-runtime.env}
+  restart: unless-stopped
+  init: true
+  stop_grace_period: 30s
+  read_only: true
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,size=256m
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  volumes:
+    - type: bind
+      source: ${WATCHYARD_DATA_DIR:-./data}
+      target: /data
+      bind:
+        create_host_path: false
+services:
+  watchyard:
+    <<: *common
+    ports:
+      - target: 8765
+        published: "8765"
+        host_ip: ${WATCHYARD_BIND_IP:?Set the VPS private VPN address; never use 0.0.0.0}
+        protocol: tcp
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/healthz', timeout=5)"]
+      interval: 30s
+      timeout: 8s
+      retries: 3
+      start_period: 120s
+  watchdog:
+    <<: *common
+    command: [python, -m, watchyard.watchdog]
+    network_mode: service:watchyard
+    depends_on:
+      watchyard:
+        condition: service_started

@@ -6,6 +6,9 @@ import shutil
 import subprocess
 import sys
 
+if sys.platform != 'darwin':
+    raise SystemExit('Use deploy/vps/compose.yaml on Linux; this installer is macOS-only.')
+
 root = Path(__file__).resolve().parents[1]
 data = Path(os.environ.get('WATCHYARD_DATA',str(Path.home()/'Library/Application Support/Watchyard')))
 data.mkdir(parents=True,exist_ok=True)

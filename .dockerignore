@@ -1,0 +1,17 @@
+.git
+.venv
+**/__pycache__
+.pytest_cache
+build
+*.egg-info
+.env*
+**/runtime.env
+**/data
+**/secrets.json
+**/settings.json
+**/*.db*
+**/*.log
+**/*.jpg
+**/*.mp4
+**/*.pt
+**/*.mlpackage

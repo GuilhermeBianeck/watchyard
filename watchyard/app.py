@@ -19,6 +19,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from .config import Settings
 from .service import Service
 from .access import Access, lan_address, lan_network
+from .runtime import Runtime
 
 STATIC = Path(__file__).parent/'static'
 
@@ -80,6 +81,7 @@ class Feedback(BaseModel):
 def create_app(service=None, run_service=True):
     service = service or Service(Settings())
     access = Access(service.settings)
+    runtime = Runtime.read()
     address = lan_address()
     home = lan_network(address)
     hostname = socket.gethostname().lower()
@@ -98,7 +100,7 @@ def create_app(service=None, run_service=True):
 
     app = FastAPI(title='Watchyard',version='0.3.0',lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
     app.state.service = service
-    app.add_middleware(TrustedHostMiddleware,allowed_hosts=['localhost','127.0.0.1','testserver',address,hostname,hostname.split('.')[0]+'.local',bonjour])
+    app.add_middleware(TrustedHostMiddleware,allowed_hosts=list(runtime.allowed_hosts) if runtime.allowed_hosts else ['localhost','127.0.0.1','testserver',address,hostname,hostname.split('.')[0]+'.local',bonjour])
 
     @app.middleware('http')
     async def secure_local(request: Request, call_next):
@@ -106,7 +108,7 @@ def create_app(service=None, run_service=True):
         if not access.local(client):
             try:
                 ip = ipaddress.ip_address(client)
-                if ip not in home:
+                if not any(ip in network for network in (runtime.allowed_networks or (home,))):
                     return Response('Home network access only',status_code=403)
             except ValueError:
                 return Response('Home network access only',status_code=403)
@@ -132,7 +134,7 @@ def create_app(service=None, run_service=True):
 
     @app.get('/api/session')
     def session(request: Request):
-        return {'authenticated':access.authenticated(request),'local':access.local(request.client.host)}
+        return {'authenticated':access.authenticated(request),'local':runtime.local_bypass and access.local(request.client.host)}
 
     @app.post('/api/login')
     def login(data: Login, request: Request):
@@ -263,8 +265,8 @@ def main():
     import os
     import uvicorn
     logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(name)s %(message)s')
-    gateway = os.environ.get('WATCHYARD_GATEWAY') == '1'
-    uvicorn.run(create_app(),host='127.0.0.1' if gateway else '0.0.0.0',port=8766 if gateway else 8765,access_log=False,proxy_headers=gateway,forwarded_allow_ips='127.0.0.1')
+    runtime = Runtime.read()
+    uvicorn.run(create_app(),host=runtime.host,port=runtime.port,access_log=False,proxy_headers=runtime.proxy_headers,forwarded_allow_ips=runtime.trusted_proxies)
 
 
 if __name__ == '__main__':

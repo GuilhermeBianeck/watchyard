@@ -5,7 +5,8 @@ import os
 from pathlib import Path
 import secrets
 
-data = Path(os.environ.get('WATCHYARD_DATA',str(Path.home()/'Library/Application Support/Watchyard')))
+from watchyard.runtime import data_directory
+data = data_directory()
 data.mkdir(parents=True,exist_ok=True)
 data.chmod(0o700)
 path = data/'secrets.json'

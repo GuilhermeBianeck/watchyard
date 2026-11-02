@@ -23,3 +23,10 @@ As a homeowner, I want to know when a person, moving vehicle or animal enters a 
 ## M4: Optional enhancements — planned
 - Evaluate a local vision-language model for optional event descriptions; never silently suppress a person alert based on an unvalidated model.
 - Explore additional classes and tailored models if field evidence warrants them.
+
+## Alternative deployment — repository preparation
+
+Linux CPU runtime, explicit network configuration and a private Docker Compose
+profile are prepared for a future VPS. No migration or VPS deployment has taken
+place. Image build, private VPN routing, throughput, transfer/storage costs and
+Linux field validation remain acceptance requirements. See vps-deployment.md.

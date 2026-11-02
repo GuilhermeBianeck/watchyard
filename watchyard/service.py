@@ -12,6 +12,7 @@ from .rules import Tracker
 from .store import Store
 from .telegram import Telegram
 from .policy import decision
+from .runtime import Runtime
 
 log = logging.getLogger('watchyard')
 
@@ -19,6 +20,7 @@ log = logging.getLogger('watchyard')
 class Service:
     def __init__(self, settings):
         self.settings = settings
+        self.runtime = Runtime.read()
         self.stop = threading.Event()
         self.store = Store(settings.path)
         self.cameras = {i:Camera(i,settings,self.stop) for i in range(1,5)}
@@ -46,14 +48,14 @@ class Service:
         os.environ['YOLO_CONFIG_DIR'] = str(self.settings.path/'ultralytics')
         os.environ['YOLO_AUTOINSTALL'] = 'false'
         from ultralytics import YOLO
-        model_path = self.settings.path/'models/yolo11n.mlpackage'
+        model_path = self.runtime.model_path(self.settings.path)
         if not model_path.exists():
-            raise RuntimeError('Core ML model missing. Run scripts/prepare_model.py.')
+            raise RuntimeError('Detector model missing. Run scripts/prepare_model.py for the selected backend.')
         self.model = YOLO(str(model_path), task='detect')
         # Force compile/warm-up now so status never says ready before inference works.
         import numpy as np
-        self.model.predict(np.zeros((540,960,3),dtype=np.uint8), verbose=False, imgsz=640)
-        self.detector = 'YOLO11 nano · Core ML'
+        self.model.predict(np.zeros((540,960,3),dtype=np.uint8), verbose=False, imgsz=640, **self.runtime.prediction_options())
+        self.detector = 'YOLO11 nano · '+('Core ML' if self.runtime.backend=='coreml' else 'PyTorch '+self.runtime.device)
         self.detector_error = None
 
     def detect(self):
@@ -78,7 +80,7 @@ class Service:
                     continue
                 start = time.perf_counter()
                 try:
-                    result = self.model.predict(frame, conf=config['confidence'], classes=[0,2,15,16], imgsz=640, verbose=False)[0]
+                    result = self.model.predict(frame, conf=config['confidence'], classes=[0,2,15,16], imgsz=640, verbose=False, **self.runtime.prediction_options())[0]
                     h,w = frame.shape[:2]
                     detections = []
                     for box in result.boxes:

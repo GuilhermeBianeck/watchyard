@@ -64,3 +64,12 @@ local reviews and the independent service watchdog. See
 [alert controls and reliability](docs/alerts-and-reliability.md) for schedule
 semantics, migration and outage limitations. No external service or paid
 subscription was added.
+
+## Future Linux / VPS option
+
+The repository also provides an optional [VPS deployment guide](docs/vps-deployment.md)
+and [Docker Compose profile](deploy/vps/compose.yaml). It uses a private VPN route
+to the home NVR, a portable CPU detector, persistent storage and authenticated
+VPN-only dashboard access. The current Mac service remains local. The optional
+profile has not been deployed to a VPS; validate its image, routing and resource
+use before migration.
