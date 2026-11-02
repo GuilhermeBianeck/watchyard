@@ -24,6 +24,21 @@ As a homeowner, I want to know when a person, moving vehicle or animal enters a 
 - Evaluate a local vision-language model for optional event descriptions; never silently suppress a person alert based on an unvalidated model.
 - Explore additional classes and tailored models if field evidence warrants them.
 
+## Multi-device and account access — implemented in 0.4
+
+As an owner, I can invite another phone, desktop browser or Telegram account so
+that it can view home cameras without sharing the owner code. I choose view-only
+or management access and can revoke the device/account independently.
+
+- One-use invitations expire after 15 minutes; new invitations default to view-only.
+- Named browser sessions and private Telegram accounts appear in Settings.
+- Per-account Telegram alert subscriptions and per-recipient retries preserve
+  private command replies and avoid repeating successful deliveries.
+- Acceptance: browser sign-in, viewer authorization, immediate revocation,
+  cookie replay rejection, concurrent invitation use and independent Telegram
+  delivery/retries pass verification. Actual phone/desktop accounts complete
+  registration by opening the owner's invitation.
+
 ## Alternative deployment — repository preparation
 
 Linux CPU runtime, explicit network configuration and a private Docker Compose

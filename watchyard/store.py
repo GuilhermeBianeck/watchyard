@@ -21,6 +21,7 @@ class Store:
         for name,definition in [('feedback',"TEXT DEFAULT 'unreviewed'"),('sent_at','REAL'),('notify_mode',"TEXT DEFAULT ''")]:
             if name not in columns:
                 self.db.execute(f'ALTER TABLE events ADD COLUMN {name} {definition}')
+        self.db.execute("CREATE TABLE IF NOT EXISTS recipient_deliveries (event_id TEXT,recipient TEXT,status TEXT DEFAULT 'pending',attempts INTEGER DEFAULT 0,next_try REAL DEFAULT 0,sent_at REAL,error TEXT DEFAULT '',created REAL,PRIMARY KEY(event_id,recipient))")
         self.db.execute('CREATE TABLE IF NOT EXISTS samples (created REAL, memory_mb INTEGER, online INTEGER, inference_ms REAL)')
         self.db.execute('CREATE INDEX IF NOT EXISTS samples_created ON samples(created)')
         self.db.execute('CREATE TABLE IF NOT EXISTS health_state (key TEXT PRIMARY KEY, name TEXT, healthy INTEGER, changed REAL, announced INTEGER DEFAULT 0)')
@@ -98,6 +99,23 @@ class Store:
             self.db.execute('UPDATE health_outbox SET status=?,attempts=attempts+1,next_try=? WHERE id=?',('sent' if sent else 'pending',time.time()+retry_in,key))
             self.db.commit()
 
+    def ensure_recipients(self,event_id,recipients):
+        with self.lock:
+            self.db.execute('BEGIN IMMEDIATE')
+            count=self.db.execute('SELECT count(*) FROM recipient_deliveries WHERE event_id=?',(event_id,)).fetchone()[0]
+            if not count:
+                self.db.executemany('INSERT OR IGNORE INTO recipient_deliveries (event_id,recipient,created) VALUES (?,?,?)',[(event_id,r['id'],time.time()) for r in recipients])
+            self.db.commit()
+
+    def recipient_deliveries(self,event_id):
+        with self.lock:
+            return [dict(r) for r in self.db.execute('SELECT * FROM recipient_deliveries WHERE event_id=?',(event_id,))]
+
+    def recipient_result(self,event_id,recipient,status,error='',retry_in=0):
+        with self.lock:
+            self.db.execute("UPDATE recipient_deliveries SET status=?,attempts=attempts+CASE WHEN ? IN ('pending','sent') THEN 1 ELSE 0 END,next_try=?,sent_at=CASE WHEN ?='sent' THEN ? ELSE sent_at END,error=? WHERE event_id=? AND recipient=?",(status,status,time.time()+retry_in,status,time.time(),error,event_id,recipient))
+            self.db.commit()
+
     def cleanup(self,days):
         cutoff=time.time()-days*86400
         with self.lock:
@@ -106,5 +124,6 @@ class Store:
                 (self.directory/'events'/row['snapshot']).unlink(missing_ok=True)
             self.db.execute('DELETE FROM events WHERE created<?',(cutoff,))
             self.db.execute('DELETE FROM samples WHERE created<?',(cutoff,))
+            self.db.execute('DELETE FROM recipient_deliveries WHERE created<?',(cutoff,))
             self.db.execute('DELETE FROM health_outbox WHERE created<?',(cutoff,))
             self.db.commit()

@@ -26,15 +26,25 @@ def flush_health(store,bot):
     if not bot.paired():
         return
     for event in store.pending_health():
-        try:
-            age=time.time()-event['created']
-            message=event['body']
-            if age>60:
-                message+='\nQueued at '+time.strftime('%d %b %H:%M:%S %Z',time.localtime(event['created']))+'. Delivery was delayed.'
-            bot.text(message,disable_notification='true')
-            store.mark_health(event['id'],True)
-        except RuntimeError:
-            store.mark_health(event['id'],False,retry_in=min(300,15*2**min(event['attempts'],4)))
+        key='health:'+event['id']
+        targets={r['id']:r for r in bot.recipient_devices()}
+        store.ensure_recipients(key,list(targets.values()))
+        for delivery in store.recipient_deliveries(key):
+            if delivery['status']!='pending':continue
+            target=targets.get(delivery['recipient'])
+            if not target:
+                store.recipient_result(key,delivery['recipient'],'cancelled');continue
+            if delivery['next_try']>time.time():continue
+            try:
+                message=event['body']
+                if time.time()-event['created']>60:
+                    message+='\nQueued at '+time.strftime('%d %b %H:%M:%S %Z',time.localtime(event['created']))+'. Delivery was delayed.'
+                bot.text(message,chat_id=target['external_id'],disable_notification='true')
+                store.recipient_result(key,delivery['recipient'],'sent')
+            except RuntimeError as exc:
+                store.recipient_result(key,delivery['recipient'],'pending',str(exc),min(300,15*2**min(delivery['attempts'],4)))
+        waiting=[d for d in store.recipient_deliveries(key) if d['status']=='pending']
+        store.mark_health(event['id'],not waiting,retry_in=15)
 
 
 def main():

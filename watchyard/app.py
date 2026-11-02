@@ -32,6 +32,7 @@ class Controls(BaseModel):
 
 class Login(BaseModel):
     code: str = Field(min_length=1,max_length=64)
+    name: str = Field('New browser',min_length=1,max_length=60)
 
 
 class CameraUpdate(BaseModel):
@@ -78,6 +79,19 @@ class Feedback(BaseModel):
     value: Literal['useful','false_alarm','unreviewed']
 
 
+class Invitation(BaseModel):
+    kind: Literal['browser','telegram']
+    name: str = Field(min_length=1,max_length=60)
+    role: Literal['admin','viewer'] = 'viewer'
+
+    @field_validator('name')
+    @classmethod
+    def name_valid(cls,value):
+        value=value.strip()
+        if not value:raise ValueError('Give the device or account a name')
+        return value
+
+
 def create_app(service=None, run_service=True):
     service = service or Service(Settings())
     access = Access(service.settings)
@@ -98,7 +112,7 @@ def create_app(service=None, run_service=True):
         if run_service:
             service.close()
 
-    app = FastAPI(title='Watchyard',version='0.3.0',lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
+    app = FastAPI(title='Watchyard',version='0.4.0',lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
     app.state.service = service
     app.add_middleware(TrustedHostMiddleware,allowed_hosts=list(runtime.allowed_hosts) if runtime.allowed_hosts else ['localhost','127.0.0.1','testserver',address,hostname,hostname.split('.')[0]+'.local',bonjour])
 
@@ -112,8 +126,13 @@ def create_app(service=None, run_service=True):
                     return Response('Home network access only',status_code=403)
             except ValueError:
                 return Response('Home network access only',status_code=403)
-        if request.url.path.startswith('/api/') and request.url.path not in ('/api/session','/api/login') and not access.authenticated(request):
-            return JSONResponse({'detail':'Sign in with your dashboard code'},status_code=401)
+        principal=access.principal(request)
+        if request.url.path.startswith('/api/') and request.url.path not in ('/api/session','/api/login'):
+            if not principal:
+                return JSONResponse({'detail':'Sign in with your dashboard code'},status_code=401)
+            administrative=request.url.path.startswith(('/api/devices','/api/invitations')) or (request.method not in ('GET','HEAD','OPTIONS') and request.url.path!='/api/logout')
+            if administrative and principal['role']!='admin':
+                return JSONResponse({'detail':'This device has view-only access'},status_code=403)
         if request.method not in ('GET','HEAD','OPTIONS'):
             if request.headers.get('x-watchyard-client') != 'dashboard':
                 return Response('Dashboard request required',status_code=403)
@@ -134,11 +153,11 @@ def create_app(service=None, run_service=True):
 
     @app.get('/api/session')
     def session(request: Request):
-        return {'authenticated':access.authenticated(request),'local':runtime.local_bypass and access.local(request.client.host)}
+        return {'authenticated':access.authenticated(request),'local':runtime.local_bypass and access.local(request.client.host),'device':access.principal(request)}
 
     @app.post('/api/login')
     def login(data: Login, request: Request):
-        token, status = access.login(data.code.strip().replace(' ',''),request.client.host)
+        token, status = access.login(data.code.strip().replace(' ',''),request.client.host,data.name.strip() or 'New browser')
         if not token:
             raise HTTPException(status,'Try again in five minutes' if status==429 else 'Incorrect dashboard code')
         response = JSONResponse({'ok':True})
@@ -146,10 +165,44 @@ def create_app(service=None, run_service=True):
         return response
 
     @app.post('/api/logout')
-    def logout():
+    def logout(request:Request):
+        token=request.cookies.get(access.cookie,'')
+        if token:access.members.revoke_session(access.digest(token))
         response = JSONResponse({'ok':True})
         response.delete_cookie(access.cookie)
         return response
+
+    def dashboard_address(request):
+        candidates=[h for h in runtime.allowed_hosts if h not in ('127.0.0.1','localhost','testserver')]
+        target=candidates[0] if candidates else address
+        port=request.url.port
+        return request.url.scheme+'://'+target+(':'+str(port) if port else '')
+
+    @app.get('/api/devices')
+    def devices(request:Request):
+        return {'devices':access.members.devices(),'invitations':access.members.invitations(),'current':access.principal(request),'dashboard_url':dashboard_address(request)}
+
+    @app.post('/api/invitations')
+    def invite(data:Invitation,request:Request):
+        try:
+            result=access.members.invite(data.kind,data.name.strip(),data.role)
+        except ValueError as exc:
+            raise HTTPException(409,str(exc)) from None
+        if data.kind=='telegram':
+            result['url']='https://t.me/'+service.telegram.username+'?start='+result['code']
+        else:
+            result['url']=dashboard_address(request)+'/#join='+result['code']
+        return result
+
+    @app.post('/api/invitations/{invite_id}/revoke')
+    def revoke_invitation(invite_id:str):
+        if not access.members.cancel(invite_id):raise HTTPException(404)
+        return {'ok':True}
+
+    @app.post('/api/devices/{device_id}/revoke')
+    def revoke_device(device_id:str):
+        if not access.members.revoke(device_id):raise HTTPException(404)
+        return {'ok':True}
 
     @app.get('/api/status')
     def status():

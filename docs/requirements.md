@@ -10,13 +10,14 @@ Reduce irrelevant motion notifications from four locally connected NVR cameras w
 3. Confirm objects over multiple observations, track visits, suppress repeat notifications, and require displacement for vehicle events.
 4. Allow per-camera alert zones, categories and enable/disable settings; full view is the initial zone.
 5. Persist confirmed event timestamps, labels, confidence, camera, delivery state and snapshots. Delete after the configured retention period.
-6. Pair one private Telegram chat using a random code and accept commands only from the paired user.
-7. Deliver one photo and caption for each eligible event. Send animal events silently. Retry transient failures with bounded retention and mark stale events as expired.
-8. Provide `/status`, `/snapshot`, `/events`, `/mute`, `/unmute` and `/help`; detection continues during mute.
+6. Approve multiple private Telegram accounts using one-use, 15-minute invitations; accept commands only from approved private accounts with matching chat/user identity.
+7. Deliver one photo and caption for each eligible event to each subscribed account. Send animal events silently. Retry transient failures per recipient with bounded retention and mark stale events as expired or partly delivered.
+8. Provide `/status`, `/snapshot`, `/events`, `/notifications`, `/mute`, `/unmute` and `/help`; detection continues during mute. Global controls require management access; each account can pause its own alerts.
 9. Provide a local dashboard with four live snapshots, health, event history, rules, mute and test notification.
 10. Report camera disconnection and recovery when the Telegram connection is available.
 11. Start at user login, recover from process failure, and expose a truthful health endpoint.
 12. Keep credentials and images outside Git; serve the dashboard on the home network with device sign-in; keep Python on loopback and reject foreign Host, Origin and subnet access.
+13. Register named phone/desktop browser sessions with view-only or management access, preserve existing owner access, and revoke sessions/accounts immediately. Sign-out revokes the browser session on the server. Invitations are one-use, expire in 15 minutes and store only a keyed hash.
 
 ## Acceptance and boundaries
 

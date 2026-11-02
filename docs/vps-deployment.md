@@ -134,13 +134,16 @@ for complete host-outage reporting.
 ## Migration from the Mac
 
 - Prepare the VPN and CPU model before stopping the Mac installation.
-- Back up event history, event JPEGs and settings. Stop all Mac services with
+- Back up event history (`events.db`), registered devices/accounts
+  (`members.db`), event JPEGs and settings. Stop all Mac services with
   `sh scripts/service.sh stop` for a consistent final copy. Copy the data securely
   (for SQLite, stop writers or use SQLite backup; do not copy a live database
   without its WAL). Exclude runtime, logs and macOS model packages.
 - Copy the protected secrets only if preserving the existing Telegram pairing.
   Rotate the dashboard code/session key on the VPS. Keep the already paired
-  Telegram chat ID and token if retaining the same bot.
+  Telegram chat ID and token if retaining the same bot. Preserve `members.db`
+  when retaining additional Telegram accounts and revoked-account tombstones.
+  Rotating the session key requires new browser sign-ins and invitations.
 - Run only ONE detector/poller with that Telegram bot token. Running both hosts
   concurrently causes duplicate alerts and getUpdates conflicts. Start the VPS
   only after the Mac poller stops.

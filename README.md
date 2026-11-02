@@ -4,7 +4,7 @@ Local camera monitoring for an Apple Silicon Mac, with Telegram alerts for peopl
 
 ## Current deployment
 
-The dashboard runs on the Mac at http://127.0.0.1:8765 and on the home Wi-Fi using the Mac’s IP address with port 8765. Mobile devices sign in with an eight-digit dashboard code. Four NVR substreams are decoded with FFmpeg and analysed locally with YOLO11 nano and Core ML. Notifications and selected snapshots go to a paired Telegram chat. Detection and event snapshots stay on the Mac; Telegram receives the alerts and images sent to it. Telegram bot chats are not end-to-end encrypted.
+The dashboard runs on the Mac at http://127.0.0.1:8765 and on the home Wi-Fi using the Mac’s IP address with port 8765. Other devices sign in with the owner code or a one-use invitation. Four NVR substreams are decoded with FFmpeg and analysed locally with YOLO11 nano and Core ML. Notifications and selected snapshots go to approved Telegram accounts. Detection and event snapshots stay on the Mac; Telegram receives the alerts and images sent to it. Telegram bot chats are not end-to-end encrypted.
 
 The macOS services start after login and requests that the Mac stay awake. It needs network access to the NVR and internet for Telegram. A closed lid, logout, power loss or network outage may stop monitoring. A small Node.js gateway serves the dashboard on home Wi-Fi; the Python service stays on loopback. A separate watchdog is needed to notify you if the Mac itself stops.
 
@@ -73,3 +73,12 @@ to the home NVR, a portable CPU detector, persistent storage and authenticated
 VPN-only dashboard access. The current Mac service remains local. The optional
 profile has not been deployed to a VPS; validate its image, routing and resource
 use before migration.
+
+## Devices and accounts (0.4)
+
+Settings → Devices & accounts registers other phone/desktop browsers and Telegram
+accounts using named, one-use invitations. Choose View only or Manage home, revoke
+access, and manage individual Telegram alert subscriptions. See
+[devices and accounts](docs/devices-and-accounts.md). Existing owner access is
+preserved. Telegram account registration applies to all Telegram clients logged
+into that account; dashboard access remains on the allowed private network.

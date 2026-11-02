@@ -77,6 +77,7 @@ def test_health_delivery_failure_keeps_queue(tmp_path):
     s=Store(tmp_path);s.observe_health('cam','Gate',False,now=0);s.observe_health('cam','Gate',False,now=60)
     class Bot:
         def paired(self):return True
+        def recipient_devices(self):return [{'id':'test','external_id':'1'}]
         def text(self,*a,**kw):raise RuntimeError('offline')
     flush_health(s,Bot())
     assert s.diagnostics()['health_events'][0]['status']=='pending'
@@ -94,7 +95,8 @@ def test_event_delivery_retries_and_reports_latency(tmp_path):
     service.telegram.last_poll_error=None
     assert service.telegram.last_error=='offline'
     with service.store.lock:
-        service.store.db.execute('UPDATE events SET next_try=0 WHERE id=?',(key,));service.store.db.commit()
+        service.store.db.execute('UPDATE events SET next_try=0 WHERE id=?',(key,))
+        service.store.db.execute('UPDATE recipient_deliveries SET next_try=0 WHERE event_id=?',(key,));service.store.db.commit()
     photos=[];service.telegram.photo=lambda *a,**kw:photos.append(kw)
     service.telegram.deliver_once()
     assert service.store.recent()[0]['status']=='sent'

@@ -64,7 +64,8 @@ def test_telegram_pairing_requires_code_and_owner(tmp_path):
     service,_=setup(tmp_path)
     service.settings.save_secrets({'PAIRING_CODE':'pair-code'})
     sent=[]
-    service.telegram.text=lambda message:sent.append(message)
+    service.telegram.text=lambda message,**kwargs:sent.append(message)
+    service.telegram.call=lambda method,data=None,**kwargs:None
     def update(text,chat=123,user=123,kind='private'):
         return {'message':{'text':text,'chat':{'id':chat,'type':kind},'from':{'id':user}}}
     service.telegram.handle(update('/start wrong'))
