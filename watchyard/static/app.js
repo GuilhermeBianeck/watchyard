@@ -2,7 +2,7 @@
 const $ = id => document.getElementById(id);
 let state=null, events=[], editing=null, points=[], zoneImage=new Image(), imageTick=0, noticeTimer;
 const esc = s => String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const title = s => ({person:'Person',car:'Moving vehicle',dog:'Dog',cat:'Cat'}[s]||s);
+const title = s => ({person:'Person',car:'Vehicle',dog:'Dog',cat:'Cat'}[s]||s);
 function notice(message){$('notice').textContent=message;$('notice').classList.remove('hidden');clearTimeout(noticeTimer);noticeTimer=setTimeout(()=>$('notice').classList.add('hidden'),8000);}
 async function api(path,data){const response=await fetch(path,data===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json','X-Watchyard-Client':'dashboard'},body:JSON.stringify(data)});if(!response.ok){const r=await response.json().catch(()=>({detail:'Connection failed'}));throw Error(r.detail||'Request failed');}return response.json();}
 async function action(path,data,message){try{await api(path,data);if(message)notice(message);await refresh();}catch(e){notice(e.message);}}
