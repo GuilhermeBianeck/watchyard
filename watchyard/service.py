@@ -11,6 +11,7 @@ from .capture import Camera, draw_detection
 from .rules import Tracker
 from .store import Store
 from .telegram import Telegram
+from .policy import decision
 
 log = logging.getLogger('watchyard')
 
@@ -108,12 +109,13 @@ class Service:
         ok = cv2.imwrite(str(self.settings.path/'events'/name),image,[cv2.IMWRITE_JPEG_QUALITY,90])
         if not ok:
             raise RuntimeError('Could not save event snapshot')
-        status = 'pending'
+        mode,reason = decision(config,camera,event['label'],time.time())
+        status = 'pending' if mode!='off' else 'recorded'
         if not config['enabled'] or config['muted_until'] > time.time():
             status = 'muted'
         elif not self.telegram.paired():
             status = 'unpaired'
-        self.store.add(camera,event['label'],event['confidence'],name,status)
+        self.store.add(camera,event['label'],event['confidence'],name,status,reason,mode)
         log.info('Confirmed %s on camera %s (%s)',event['label'],camera['id'],status)
 
     def status(self):
@@ -129,7 +131,7 @@ class Service:
         for child in children:
             try: ram += child.memory_info().rss
             except psutil.Error: pass
-        return {'version':'0.2.0','started':self.started,'detector':self.detector,'detector_error':self.detector_error,'cameras':cameras,'settings':config,'telegram':{'paired':self.telegram.paired(),'username':self.telegram.username,'error':self.telegram.last_error,'last_success':self.telegram.last_success},'memory_mb':round(ram/1024**2),'system_memory_percent':psutil.virtual_memory().percent}
+        return {'version':'0.3.0','started':self.started,'detector':self.detector,'detector_error':self.detector_error,'cameras':cameras,'settings':config,'telegram':{'paired':self.telegram.paired(),'username':self.telegram.username,'error':self.telegram.last_error,'last_success':self.telegram.last_success,'last_send_at':self.telegram.last_send_at,'delivery_error':self.telegram.last_delivery_error,'poll_error':self.telegram.last_poll_error},'memory_mb':round(ram/1024**2),'system_memory_percent':psutil.virtual_memory().percent}
 
     def status_text(self):
         status = self.status()
@@ -141,22 +143,19 @@ class Service:
 
     def monitor(self):
         last_cleanup = 0
+        last_sample = 0
         while not self.stop.wait(15):
-            if time.time()-last_cleanup > 3600:
+            now = time.time()
+            if now-last_cleanup > 3600:
                 self.store.cleanup(self.settings.snapshot()['retention_days'])
-                last_cleanup = time.time()
+                last_cleanup = now
+            if now-last_sample >= 60:
+                self.store.sample(self.status())
+                last_sample = now
+            if now-self.started < 60:
+                continue
             for camera_id,camera in self.cameras.items():
-                online = time.time()-camera.captured_at<12
-                previous = self.previous_online.get(camera_id)
-                self.previous_online[camera_id] = online
-                # Wait through connection startup; one message per transition.
-                if time.time()-self.started < 60 or previous is None or previous==online or not self.telegram.paired():
-                    continue
-                try:
-                    name = self.camera_config(camera_id)['name']
-                    self.telegram.text(f"{name}: camera {'connection recovered' if online else 'disconnected; reconnecting automatically'}.",disable_notification='true')
-                except RuntimeError:
-                    pass
+                self.store.observe_health('camera-'+str(camera_id),self.camera_config(camera_id)['name'],now-camera.captured_at<30)
 
     def close(self):
         self.stop.set()

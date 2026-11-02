@@ -4,15 +4,22 @@ import threading
 import time
 
 import requests
+from .policy import decision
 
 
 class Telegram:
     def __init__(self, settings, service):
         self.settings, self.service = settings, service
-        self.offset = 0
-        self.last_error = None
+        self.offset = settings.snapshot().get('telegram_offset',0)
+        self.last_delivery_error = None
+        self.last_poll_error = None
+        self.last_send_at = 0
         self.last_success = 0
         self.username = "HouseCCTVAlertBot"
+
+    @property
+    def last_error(self):
+        return self.last_delivery_error or self.last_poll_error
 
     def call(self, method, data=None, files=None, timeout=20):
         token = self.settings.secret('TELEGRAM_BOT_TOKEN')
@@ -28,7 +35,6 @@ class Telegram:
             code = payload.get('error_code', response.status_code)
             raise RuntimeError(f'Telegram API error {code}')
         self.last_success = time.time()
-        self.last_error = None
         return payload.get('result')
 
     def paired(self):
@@ -39,12 +45,19 @@ class Telegram:
         return target is not None and chat.get('type') == 'private' and chat.get('id') == target and user.get('id') == target
 
     def text(self, message, **extra):
-        return self.call('sendMessage', {'chat_id':self.settings.secret('TELEGRAM_CHAT_ID'), 'text':message, **extra})
+        result = self.call('sendMessage', {'chat_id':self.settings.secret('TELEGRAM_CHAT_ID'), 'text':message, **extra})
+        self.last_send_at = time.time()
+        return result
 
-    def photo(self, image, caption, silent=False):
+    def photo(self, image, caption, silent=False, event_id=None):
         import json
         keyboard = {'inline_keyboard': [[{'text':'Mute 1 hour','callback_data':'mute:60'}, {'text':'Status','callback_data':'status'}]]}
-        return self.call('sendPhoto', {'chat_id':self.settings.secret('TELEGRAM_CHAT_ID'), 'caption':caption, 'disable_notification':str(silent).lower(), 'reply_markup':json.dumps(keyboard)}, files={'photo':('camera.jpg',image,'image/jpeg')})
+        if event_id:
+            keyboard['inline_keyboard'].append([{'text':'Useful alert','callback_data':'review:useful:'+event_id},{'text':'False alarm','callback_data':'review:false_alarm:'+event_id}])
+        result = self.call('sendPhoto', {'chat_id':self.settings.secret('TELEGRAM_CHAT_ID'), 'caption':caption, 'disable_notification':str(silent).lower(), 'reply_markup':json.dumps(keyboard)}, files={'photo':('camera.jpg',image,'image/jpeg')})
+        self.last_send_at = time.time()
+        self.last_delivery_error = None
+        return result
 
     def handle(self, update):
         message = update.get('message', {})
@@ -94,6 +107,9 @@ class Telegram:
         elif cmd == '/unmute':
             self.settings.save({'muted_until':0, 'enabled':True})
             self.text('Alerts resumed.')
+        elif cmd == '/review' and len(parts)==3 and parts[1] in ('useful','false_alarm'):
+            saved = self.service.store.feedback(parts[2],parts[1])
+            self.text('Review saved.' if saved else 'That event is no longer in local history.',disable_notification='true')
         elif cmd == '/events':
             events = self.service.store.recent(5)
             self.text('\n'.join(f"{dt.datetime.fromtimestamp(e['created']).astimezone():%H:%M} · {e['label']} · {e['camera_name']} · {e['status']}" for e in events) if events else 'No confirmed events yet. Try walking through a camera view.')
@@ -102,39 +118,49 @@ class Telegram:
         while not self.service.stop.is_set():
             try:
                 updates = self.call('getUpdates', {'offset':self.offset,'timeout':15,'allowed_updates':'["message","callback_query"]'}, timeout=22)
+                self.last_poll_error = None
                 for update in updates:
                     # Advance after handling. Retried commands are harmless/idempotent.
                     self.handle(update)
                     self.offset = update['update_id']+1
+                    self.settings.save({'telegram_offset':self.offset})
             except Exception as exc:
-                self.last_error = str(exc) if isinstance(exc, RuntimeError) else type(exc).__name__
+                self.last_poll_error = str(exc) if isinstance(exc, RuntimeError) else type(exc).__name__
                 self.service.stop.wait(5)
+
+    def deliver_once(self):
+        if not self.paired():
+            return
+        for event in self.service.store.pending():
+            age = time.time()-event['created']
+            if age > 180:
+                self.service.store.mark(event['id'],'expired','Event retained locally; notification older than three minutes')
+                continue
+            config = self.settings.snapshot()
+            camera = next(c for c in config['cameras'] if c['id']==event['camera'])
+            mode,reason = decision(config,camera,event['label'],event['created'])
+            if not config['enabled'] or config['muted_until'] > time.time():
+                mode,reason = 'off','Notifications muted before delivery'
+            if mode=='off':
+                self.service.store.mark(event['id'],'recorded',reason)
+                continue
+            try:
+                image = (self.settings.path/'events'/event['snapshot']).read_bytes()
+                stamp = dt.datetime.fromtimestamp(event['created']).astimezone().strftime('%d %b %H:%M:%S %Z')
+                action = 'Moving vehicle' if event['label']=='car' else event['label'].capitalize()+' detected'
+                caption = f"{action} · {event['camera_name']}\n{stamp}\nConfirmed across multiple frames."
+                if age > 15:
+                    caption += f'\nDelayed delivery: {int(age)} seconds.'
+                self.photo(image,caption,silent=mode=='silent',event_id=event['id'])
+                self.last_delivery_error = None
+                self.service.store.mark(event['id'],'sent')
+            except Exception as exc:
+                self.last_delivery_error = str(exc) if isinstance(exc,RuntimeError) else type(exc).__name__
+                self.service.store.mark(event['id'],'pending',self.last_delivery_error,retry_in=min(60,5*2**min(event['attempts'],4)))
 
     def deliver(self):
         while not self.service.stop.wait(1):
-            if not self.paired():
-                continue
-            for event in self.service.store.pending():
-                age = time.time()-event['created']
-                if age > 180:
-                    self.service.store.mark(event['id'],'expired','Event retained locally; notification older than three minutes')
-                    continue
-                config = self.settings.snapshot()
-                if not config['enabled'] or config['muted_until'] > time.time():
-                    self.service.store.mark(event['id'],'muted','Notifications muted before delivery')
-                    continue
-                try:
-                    image = (self.settings.path/'events'/event['snapshot']).read_bytes()
-                    stamp = dt.datetime.fromtimestamp(event['created']).astimezone().strftime('%d %b %H:%M:%S %Z')
-                    action = 'Moving vehicle' if event['label']=='car' else event['label'].capitalize()+' detected'
-                    caption = f"{action} · {event['camera_name']}\n{stamp}\nConfirmed across multiple frames."
-                    if age > 15:
-                        caption += f'\nDelayed delivery: {int(age)} seconds.'
-                    self.photo(image, caption, silent=event['label'] in ('cat','dog'))
-                    self.service.store.mark(event['id'],'sent')
-                except Exception as exc:
-                    self.last_error = str(exc) if isinstance(exc, RuntimeError) else type(exc).__name__
-                    self.service.store.mark(event['id'],'pending','Temporary notification failure',retry_in=min(60,5*2**min(event['attempts'],4)))
+            self.deliver_once()
 
     def start(self):
         threading.Thread(target=self.poll,name='telegram-poll',daemon=True).start()

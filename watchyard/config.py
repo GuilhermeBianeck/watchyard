@@ -32,6 +32,10 @@ class Settings:
         f = self.path / "settings.json"
         if f.exists():
             self.value.update(json.loads(f.read_text()))
+        from .policy import MODES,DEFAULT_SCHEDULE
+        for camera in self.value['cameras']:
+            camera.setdefault('alert_modes',copy.deepcopy(MODES))
+            camera.setdefault('schedule',copy.deepcopy(DEFAULT_SCHEDULE))
         sf = self.path / "secrets.json"
         self.secrets = json.loads(sf.read_text()) if sf.exists() else {}
 

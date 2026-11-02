@@ -21,6 +21,7 @@ if not runtime.exists():
         subprocess.run([str(runtime/'bin/python'),'-m','pip','install',str(root)],check=True)
 python = runtime/'bin/python'
 subprocess.run([str(python),'-m','pip','install','--no-deps','--no-build-isolation','--force-reinstall',str(root)],check=True)
+subprocess.run([str(python),'-c','from watchyard.config import Settings; from watchyard.store import Store; Store(Settings().path)'],check=True)
 logs = data/'logs'; logs.mkdir(exist_ok=True)
 gateway = data/'gateway.cjs'
 shutil.copyfile(root/'watchyard/gateway.cjs',gateway)
@@ -51,4 +52,14 @@ gateway_plist.write_bytes(plistlib.dumps(gateway_payload))
 subprocess.run(['launchctl','bootout',target,str(gateway_plist)],capture_output=True)
 subprocess.run(['launchctl','bootstrap',target,str(plist)],check=True)
 subprocess.run(['launchctl','bootstrap',target,str(gateway_plist)],check=True)
-print('Installed Watchyard LaunchAgent. Dashboard: http://127.0.0.1:8765')
+watchdog_plist = agents/'com.watchyard.watchdog.plist'
+watchdog_payload = {
+    'Label':'com.watchyard.watchdog','ProgramArguments':[str(python),'-m','watchyard.watchdog'],
+    'WorkingDirectory':str(data),'EnvironmentVariables':payload['EnvironmentVariables'],
+    'RunAtLoad':True,'KeepAlive':True,'ThrottleInterval':15,
+    'StandardOutPath':str(logs/'watchdog.log'),'StandardErrorPath':str(logs/'watchdog-error.log'),
+}
+watchdog_plist.write_bytes(plistlib.dumps(watchdog_payload))
+subprocess.run(['launchctl','bootout',target,str(watchdog_plist)],capture_output=True)
+subprocess.run(['launchctl','bootstrap',target,str(watchdog_plist)],check=True)
+print('Installed Watchyard services. Dashboard: http://127.0.0.1:8765')

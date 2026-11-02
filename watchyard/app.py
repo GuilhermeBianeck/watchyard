@@ -4,11 +4,16 @@ import ipaddress
 import socket
 import subprocess
 import time
+import csv
+import io
+import json
+from typing import Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, Response, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .config import Settings
@@ -34,6 +39,44 @@ class CameraUpdate(BaseModel):
     zone: list[list[float]] = Field(default_factory=list,max_length=20)
 
 
+class Schedule(BaseModel):
+    enabled: bool = False
+    days: list[int] = Field(default_factory=lambda:list(range(7)),max_length=7)
+    start: str = Field('22:00',pattern=r'^(?:[01]\d|2[0-3]):[0-5]\d$')
+    end: str = Field('07:00',pattern=r'^(?:[01]\d|2[0-3]):[0-5]\d$')
+    timezone: str = 'Europe/Lisbon'
+
+    @field_validator('days')
+    @classmethod
+    def days_valid(cls,value):
+        if len(set(value))!=len(value) or any(d<0 or d>6 for d in value):
+            raise ValueError('Choose distinct weekdays from Monday to Sunday')
+        return value
+
+    @field_validator('timezone')
+    @classmethod
+    def timezone_valid(cls,value):
+        try: ZoneInfo(value)
+        except (ZoneInfoNotFoundError,ValueError): raise ValueError('Unknown timezone')
+        return value
+
+
+class AlertPolicy(BaseModel):
+    alert_modes: dict[str,Literal['normal','silent','off']]
+    schedule: Schedule
+
+    @field_validator('alert_modes')
+    @classmethod
+    def modes_valid(cls,value):
+        if set(value)!={'person','car','dog','cat'}:
+            raise ValueError('Provide a preference for all four object categories')
+        return value
+
+
+class Feedback(BaseModel):
+    value: Literal['useful','false_alarm','unreviewed']
+
+
 def create_app(service=None, run_service=True):
     service = service or Service(Settings())
     access = Access(service.settings)
@@ -53,7 +96,7 @@ def create_app(service=None, run_service=True):
         if run_service:
             service.close()
 
-    app = FastAPI(title='Watchyard',version='0.2.0',lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
+    app = FastAPI(title='Watchyard',version='0.3.0',lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
     app.state.service = service
     app.add_middleware(TrustedHostMiddleware,allowed_hosts=['localhost','127.0.0.1','testserver',address,hostname,hostname.split('.')[0]+'.local',bonjour])
 
@@ -120,6 +163,31 @@ def create_app(service=None, run_service=True):
     def events():
         return service.store.recent(80)
 
+    @app.get('/api/events/export')
+    def export_events():
+        stream=io.StringIO()
+        fields=['id','created','camera_name','label','confidence','status','feedback','sent_at','attempts','detail']
+        writer=csv.DictWriter(stream,fieldnames=fields,extrasaction='ignore')
+        writer.writeheader()
+        writer.writerows(service.store.recent(5000))
+        return Response(stream.getvalue(),media_type='text/csv',headers={'Content-Disposition':'attachment; filename="watchyard-events.csv"'})
+
+    @app.post('/api/events/{event_id}/feedback')
+    def feedback(event_id:str,data:Feedback):
+        if not service.store.feedback(event_id,data.value):
+            raise HTTPException(404,'Event not found')
+        return {'ok':True}
+
+    @app.get('/api/diagnostics')
+    def diagnostics():
+        data=service.store.diagnostics()
+        try:
+            state=json.loads((service.settings.path/'watchdog-state.json').read_text())
+            data['watchdog']={'checked_at':state['checked_at'],'healthy':state['healthy'],'fresh':time.time()-state['checked_at']<60}
+        except (OSError,ValueError,KeyError):
+            data['watchdog']=None
+        return data
+
     @app.get('/api/cameras/{camera_id}/snapshot')
     def snapshot(camera_id: int):
         camera = service.cameras.get(camera_id)
@@ -174,6 +242,16 @@ def create_app(service=None, run_service=True):
             service.telegram.text('Watchyard test notification. Telegram delivery is working. Walk through a camera view to test object detection.')
         except RuntimeError as exc:
             raise HTTPException(503,str(exc)) from None
+        return {'ok':True}
+
+    @app.post('/api/cameras/{camera_id}/alerts')
+    def alert_policy(camera_id:int,data:AlertPolicy):
+        cameras=service.settings.snapshot()['cameras']
+        camera=next((c for c in cameras if c['id']==camera_id),None)
+        if camera is None:
+            raise HTTPException(404)
+        camera.update(data.model_dump())
+        service.settings.save({'cameras':cameras})
         return {'ok':True}
 
     app.mount('/static',StaticFiles(directory=STATIC),name='static')

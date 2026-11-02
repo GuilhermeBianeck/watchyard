@@ -6,11 +6,11 @@ Local camera monitoring for an Apple Silicon Mac, with Telegram alerts for peopl
 
 The dashboard runs on the Mac at http://127.0.0.1:8765 and on the home Wi-Fi using the Mac’s IP address with port 8765. Mobile devices sign in with an eight-digit dashboard code. Four NVR substreams are decoded with FFmpeg and analysed locally with YOLO11 nano and Core ML. Notifications and selected snapshots go to a paired Telegram chat. Detection and event snapshots stay on the Mac; Telegram receives the alerts and images sent to it. Telegram bot chats are not end-to-end encrypted.
 
-The macOS LaunchAgent starts after login and requests that the Mac stay awake. It needs network access to the NVR and internet for Telegram. A closed lid, logout, power loss or network outage may stop monitoring. A small Node.js gateway serves the dashboard on home Wi-Fi; the Python service stays on loopback. A separate watchdog is needed to notify you if the Mac itself stops.
+The macOS services start after login and requests that the Mac stay awake. It needs network access to the NVR and internet for Telegram. A closed lid, logout, power loss or network outage may stop monitoring. A small Node.js gateway serves the dashboard on home Wi-Fi; the Python service stays on loopback. A separate watchdog is needed to notify you if the Mac itself stops.
 
 ## Use
 
-Open the dashboard to view cameras, inspect events, set alert zones and mute notifications. In Telegram use `/status`, `/snapshot` (or `/snapshot 1` through `/snapshot 4`), `/events`, `/mute 60`, `/unmute` and `/help`. People and vehicles alert audibly; dogs and cats are silent. A moving vehicle must change position before alerting. Event pictures are kept locally for seven days.
+Open the dashboard to view cameras, inspect events, set alert zones and mute notifications. In Telegram use `/status`, `/snapshot` (or `/snapshot 1` through `/snapshot 4`), `/events`, `/mute 60`, `/unmute` and `/help`. By default, people and vehicles alert audibly; dogs and cats are silent. A moving vehicle must change position before alerting. Event pictures are kept locally for seven days.
 
 ## Setup on macOS
 
@@ -54,3 +54,13 @@ a firewall rule may prevent mobile access.
 Run `.venv/bin/python -m pytest -q`. Rules require repeated detections, use the bottom of the bounding box for zones, suppress duplicates within a track and require movement for vehicles. Tracking is basic: occlusions, nighttime lighting, small distant animals and rapid motion can cause missed or duplicate alerts. Thresholds and zones trade false positives against missed events. Telegram delivery depends on internet and phone notification settings. Failed notifications retry for up to three minutes; older events remain local.
 
 See [requirements](docs/requirements.md), [architecture](docs/architecture.md), [stories and milestones](docs/roadmap.md), and [design](docs/design.md). YOLO and the Ultralytics library use AGPL licensing; review their terms before distributing or offering this as a service.
+
+## Release 0.3
+
+Per-camera schedules and Sound/Silent/Local history controls are available in
+Settings. Review events on the dashboard or Telegram; export retained metadata
+from Activity. Reliability settings show queue state, measured delivery delay,
+local reviews and the independent service watchdog. See
+[alert controls and reliability](docs/alerts-and-reliability.md) for schedule
+semantics, migration and outage limitations. No external service or paid
+subscription was added.

@@ -8,15 +8,15 @@ As a homeowner, I want to know when a person, moving vehicle or animal enters a 
 - Pair a single private Telegram chat and deliver a test snapshot.
 - Acceptance: four fresh views, successful inference, verified pairing and automated rule tests.
 
-## M2: Field pilot — in progress
+## M2: Field pilot — instrumented, field validation in progress
 - Walk through each camera's view by day and night; test vehicle arrival and pets where safe.
-- Review events and missed events against NVR footage; define zones and calibrate thresholds.
-- Monitor memory, thermals, sleep, reconnects and alert latency over several days.
+- Useful/False alarm review and CSV export implemented. Review events and missed events against NVR footage; define zones and calibrate thresholds.
+- Per-minute memory and inference sampling plus Telegram-acceptance latency implemented. Observe thermals, sleep, reconnects and accuracy over several days; no sustained results claimed yet.
 - Acceptance: user reviews real alerts and agrees the false-alarm/miss balance is acceptable. No accuracy target is claimed before a representative dataset exists.
 
-## M3: Reliability and control — planned
-- Durable offline/recovery notifications, external heartbeat and user-visible delivery diagnostics.
-- Configurable alert severity by camera, object and schedule; robust multi-object tracking and re-identification.
+## M3: Reliability and control — partly implemented in 0.3
+- Implemented: durable offline/recovery queue, independent same-Mac service watchdog and delivery diagnostics. A heartbeat outside the Mac remains planned.
+- Implemented: notification severity by camera/object, weekday and overnight schedules. Tracking and cross-camera re-identification remain future work.
 - Home Wi-Fi dashboard access and iPhone layout: implemented in 0.2, with authenticated sessions. Internet/VPN access and short event clips remain planned.
 - Acceptance: recovery and outage scenarios pass documented end-to-end checks without exposing the NVR.
 
