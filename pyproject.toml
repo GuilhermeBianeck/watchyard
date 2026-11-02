@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=74"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "watchyard"
+version = "0.1.0"
+description = "Local camera intelligence and private-chat Telegram alerts for Apple Silicon"
+requires-python = ">=3.11,<3.14"
+license = "AGPL-3.0-only"
+dependencies = ["fastapi>=0.115", "uvicorn>=0.30", "requests>=2.32", "numpy>=1.26,<=2.3.5", "opencv-python>=4.10", "ultralytics>=8.3", "coremltools>=8; sys_platform == 'darwin'", "psutil>=6"]
+
+[project.optional-dependencies]
+test = ["pytest>=8", "httpx>=0.27"]
+
+[tool.setuptools.package-data]
+watchyard = ["static/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

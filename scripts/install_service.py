@@ -1,0 +1,40 @@
+"""Install current source into a persistent runtime and a per-user LaunchAgent."""
+import os
+from pathlib import Path
+import plistlib
+import shutil
+import subprocess
+import sys
+
+root = Path(__file__).resolve().parents[1]
+data = Path(os.environ.get('WATCHYARD_DATA',str(Path.home()/'Library/Application Support/Watchyard')))
+data.mkdir(parents=True,exist_ok=True)
+data.chmod(0o700)
+runtime = data/'runtime'
+dev = root/'.venv'
+if not runtime.exists():
+    if dev.exists() and not dev.is_symlink():
+        shutil.move(str(dev),str(runtime))
+        dev.symlink_to(runtime,target_is_directory=True)
+    else:
+        subprocess.run([sys.executable,'-m','venv',str(runtime)],check=True)
+        subprocess.run([str(runtime/'bin/python'),'-m','pip','install',str(root)],check=True)
+python = runtime/'bin/python'
+subprocess.run([str(python),'-m','pip','install','--no-deps','--no-build-isolation','--force-reinstall',str(root)],check=True)
+logs = data/'logs'; logs.mkdir(exist_ok=True)
+agents = Path.home()/'Library/LaunchAgents'; agents.mkdir(exist_ok=True)
+plist = agents/'com.watchyard.server.plist'
+payload = {
+    'Label':'com.watchyard.server',
+    'ProgramArguments':['/usr/bin/caffeinate','-i','-s',str(python),'-m','watchyard.app'],
+    'WorkingDirectory':str(data),
+    'EnvironmentVariables':{'PATH':'/opt/homebrew/bin:/usr/bin:/bin','WATCHYARD_DATA':str(data),'TZ':'Europe/Lisbon','PYTHONUNBUFFERED':'1','YOLO_AUTOINSTALL':'false','OMP_NUM_THREADS':'2'},
+    'RunAtLoad':True,'KeepAlive':True,'ThrottleInterval':15,
+    'StandardOutPath':str(logs/'server.log'),'StandardErrorPath':str(logs/'server-error.log'),
+    'ProcessType':'Background',
+}
+plist.write_bytes(plistlib.dumps(payload))
+target=f'gui/{os.getuid()}'
+subprocess.run(['launchctl','bootout',target,str(plist)],capture_output=True)
+subprocess.run(['launchctl','bootstrap',target,str(plist)],check=True)
+print('Installed Watchyard LaunchAgent. Dashboard: http://127.0.0.1:8765')
