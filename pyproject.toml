@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "watchyard"
-version = "0.8.6"
+version = "0.8.7"
 description = "Private camera detection and Telegram alerts for macOS and Linux"
 requires-python = ">=3.11,<3.14"
 license = "AGPL-3.0-only"

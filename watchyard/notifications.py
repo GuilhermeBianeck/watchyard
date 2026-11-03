@@ -13,6 +13,7 @@ import requests
 
 from .policy import decision
 from .correlation import LABELS, preview
+from .telegram import Telegram, TelegramAPIError, keyboard
 
 
 @dataclass(frozen=True)
@@ -50,10 +51,11 @@ class TelegramProvider:
         if notice.event:
             self.bot.photo(image(), notice.message, silent=notice.silent,
                            event_id=notice.id, chat_id=target)
-        elif notice.silent:
-            self.bot.text(notice.message, chat_id=target, disable_notification='true')
         else:
-            self.bot.text(notice.message, chat_id=target)
+            options = {'disable_notification': 'true'} if notice.silent else {}
+            if notice.kind in ('health', 'test'):
+                options.update(keyboard([[Telegram.dashboard_link('Open dashboard', 'home')]]))
+            self.bot.text(notice.message, chat_id=target, **options)
 
 
 class PushoverProvider:
@@ -200,6 +202,11 @@ class Notifications:
                 if provider is self.telegram and hasattr(self.bot, 'last_delivery_error'):
                     self.bot.last_delivery_error = error
                 delay = min(300, 15*2**min(d['attempts'],4)) if notice.kind == 'health' else min(60, 5*2**min(d['attempts'],4))
+                if isinstance(exc, TelegramAPIError):
+                    if exc.code == 403:
+                        store.recipient_result(key, d['recipient'], 'cancelled', error)
+                        continue
+                    delay = max(delay, exc.retry_after)
                 store.recipient_result(key, d['recipient'], 'pending', error, delay)
         return store.recipient_deliveries(key)
 
@@ -237,9 +244,9 @@ class Notifications:
                 continue
             stamp = dt.datetime.fromtimestamp(event['created']).astimezone().strftime('%d %b %H:%M:%S %Z')
             action = 'Moving vehicle' if event['label']=='car' else event['label'].capitalize()+' detected'
-            caption = f"{action} · {event['camera_name']}\n{stamp}\nConfirmed across multiple frames."
+            caption = f"{action} · {event['camera_name']}\n{stamp}"
             if age > 15:
-                caption += f'\nDelayed delivery: {int(age)} seconds.'
+                caption += f'\nDelivered {int(age)} seconds after detection.'
             notice = Notice('event', key, event['created'], caption, mode=='silent', event)
             targets = self.targets()
             group = self.group_for(store, event) if any(

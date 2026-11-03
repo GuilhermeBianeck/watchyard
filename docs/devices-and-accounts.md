@@ -37,10 +37,9 @@ with matching Telegram user/chat identity can enroll. Groups and forwarded user
 identities are not supported. One Telegram account can use the same approved bot
 chat on its mobile and desktop apps; these are not separate account registrations.
 
-Approved accounts can request `/status`, `/snapshot` and `/events`. They receive
-future camera alerts with snapshots by default. Use `/notifications off` to pause
-only that account's alerts and `/notifications on` to resume. This does not mute
-the home or prevent on-demand snapshots. Revoke an account in the dashboard to
+Approved accounts can use `/status`, `/cameras`, `/snapshot` and `/events`. They receive
+future camera alerts with snapshots by default. Use `/notifications` to check,
+pause or resume alerts for your account. On-demand snapshots are still available. Revoke an account in the dashboard to
 stop future commands and alert delivery. Already-delivered pictures cannot be
 recalled by revocation.
 
@@ -75,3 +74,11 @@ cannot return. Include members.db in secure migration/backup, using SQLite
 backup or stopping all writers. The watchdog reads the same registry and does
 not reactivate revoked accounts. No additional Telegram accounts are enrolled
 until an owner invitation is used.
+
+
+Telegram alerts link to the original replay and, for grouped activity, the
+other camera views in the group. Both links require normal dashboard access.
+Review buttons confirm in place. Use /cameras for a named snapshot picker
+or /status for camera health and alert controls. Only managers can pause
+alerts for the whole home. Pausing an account keeps snapshots and other
+on-demand commands available.

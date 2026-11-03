@@ -202,3 +202,7 @@ h1 { font-size: clamp(28px, 3vw, 38px); letter-spacing: -.045em; }
 #correlation-groups li small { display: block; }
 #correlation-groups button { min-height: 44px; padding: 4px; color: var(--blue); text-align: left; }
 #correlation-groups button svg { width: 14px; height: 14px; vertical-align: middle; }
+#correlation-groups .linked-activity-group {
+  border-top-color: var(--blue);
+  border-top-width: 2px;
+}

@@ -241,9 +241,16 @@ def create_app(service=None, run_service=True):
         return event
 
     @app.get('/api/activity/preview')
-    def activity_preview():
+    def activity_preview(group: str | None = None):
         from .correlation import preview
-        return preview(service.store.correlation_events())
+
+        rows = service.store.correlation_events()
+        if group and re.fullmatch(r'[0-9a-f]{32}', group):
+            items = preview(rows, limit=None, include_single=True)
+            selected = [item for item in items if item['id'] == group]
+            others = [item for item in items if item['id'] != group and len(item['events']) > 1]
+            return (selected + others)[:12]
+        return preview(rows)
 
     @app.get('/api/events')
     def events(request: Request):
