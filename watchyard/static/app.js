@@ -6,22 +6,169 @@ const title = s => ({person:'Person',car:'Vehicle',dog:'Dog',cat:'Cat'}[s]||s);
 const delivery = s => ({sent:'Alert delivered',pending:'Waiting to send',muted:'Saved quietly',recorded:'Local history',unpaired:'Saved on server',partial:'Partly delivered',expired:'Saved on server'}[s]||s);
 let diagnostics=null,policyCamera=null,activeEvent=null,admin=true,deviceInfo=null,deviceSignature='';
 let linkedEvent=location.hash.startsWith('#event=')?location.hash.slice(7):null;
-let state=null,events=[],signedIn=false,localDevice=false,currentView='home',filter='all',activeCamera=null,editing=null,points=[],zoneImage=new Image(),tick=0,toastTimer,busy=false,eventSignature='';
+let state=null,events=[],signedIn=false,localDevice=false,currentView='home',filter='all',activeCamera=null,editing=null,points=[],zoneImage=new Image(),tick=0,toastTimer,busy=false,eventSignature='', cameraFilter='';
 const scrollPositions={home:0,activity:0,settings:0};
 function notice(message){$('notice').textContent=message;$('notice').classList.remove('hidden');clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('notice').classList.add('hidden'),6000);}
 function showLogin(){signedIn=false;window.WatchyardReplay?.reset();window.WatchyardLive?.reset();$('app-shell').classList.add('hidden');$('login-screen').classList.remove('hidden');document.querySelectorAll('dialog[open]').forEach(d=>d.close());document.querySelectorAll('.camera-picture img').forEach(i=>i.removeAttribute('src'));}
 async function api(path,data,{signal}={}){const response=await fetch(path,data===undefined?{cache:'no-store',signal}:{method:'POST',headers:{'Content-Type':'application/json','X-Watchyard-Client':'dashboard'},body:JSON.stringify(data)});if(!response.ok){if(response.status===401&&path!=='/api/login')showLogin();const r=await response.json().catch(()=>({detail:'Cannot connect to Watchyard'}));throw Error(typeof r.detail==='string'?r.detail:'Check the values and try again');}return response.json();}
 async function action(path,data,message){try{await api(path,data);if(message)notice(message);await refresh();}catch(e){notice(e.message);}}
-function navigate(view,writeHash=true){if(view.startsWith('join='))view='home';if(view.startsWith('event='))view='activity';if(!['home','activity','settings'].includes(view))view='home';scrollPositions[currentView]=window.scrollY;currentView=view;document.querySelectorAll('.view').forEach(v=>v.classList.toggle('hidden',v.id!=='view-'+view));document.querySelectorAll('[data-nav]').forEach(b=>{if(b.dataset.nav===view)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current');});if(writeHash&&location.hash!=='#'+view)history.replaceState(null,'','#'+view);window.scrollTo(0,scrollPositions[view]||0);document.title='Watchyard · '+({home:'Home',activity:'Activity',settings:'Settings'}[view]);if(state){renderCameras();renderEvents(true);}}
-function emptyState(){return `<div class="empty-state">${icon('activity')}<h3>All quiet for now</h3><p>Confirmed detections will appear here. Try walking through a camera view.</p></div>`;}
-function eventMarkup(e){return `<button class="event" data-event="${e.id}" aria-label="View ${esc(title(e.label))} at ${esc(e.camera_name)}"><img class="event-thumb" src="/api/events/${e.snapshot}" alt="" loading="lazy"><span class="event-info"><h3>${esc(title(e.label))} detected</h3><p>${esc(e.camera_name)}</p><span class="delivery ${esc(e.status)}">${e.status==='sent'?'✓ ':''}${esc(delivery(e.status))}</span></span><time class="event-time">${new Date(e.created*1000).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</time></button>`;}
-function renderEvents(force=false){const signature=JSON.stringify(events.map(e=>[e.id,e.status,e.feedback]));if(!force&&signature===eventSignature)return;eventSignature=signature;$('latest-events').innerHTML=events.length?events.slice(0,3).map(eventMarkup).join(''):emptyState();const selected=events.filter(e=>filter==='all'||e.label===filter||(filter==='pets'&&['dog','cat'].includes(e.label)));const groups=new Map();for(const e of selected){const day=new Date(e.created*1000).toLocaleDateString([],{day:'numeric',month:'long',year:'numeric'});if(!groups.has(day))groups.set(day,[]);groups.get(day).push(e);}$('events').innerHTML=groups.size?[...groups].map(([day,items])=>`<h2 class="day-heading">${day}</h2><div class="grouped-list">${items.map(eventMarkup).join('')}</div>`).join(''):emptyState();$('event-total').textContent=String(selected.length);$('sidebar-count').textContent=events.length; $('sidebar-count').classList.toggle('hidden',!events.length);document.querySelectorAll('[data-event]').forEach(b=>b.addEventListener('click',()=>{const e=events.find(e=>e.id===b.dataset.event);$('event-image').src='/api/events/'+e.snapshot;$('event-caption').textContent=`${title(e.label)} at ${e.camera_name} · ${new Date(e.created*1000).toLocaleString()} · ${delivery(e.status)}`;activeEvent=e.id;renderReview(e);$('image-dialog').showModal();}));}
-function cameraDetail(c){if(!c.enabled)return 'Analysis paused';if(!c.online)return 'Reconnecting';if(c.detections.length)return [...new Set(c.detections.map(d=>title(d.label)))].join(', ')+' in view';return c.zone.length?'Watching selected area':'Watching full view';}
-function renderCameras(){$('camera-count').textContent=state.cameras.length;if(!$('camera-grid').children.length){$('camera-grid').innerHTML=state.cameras.map(c=>`<article class="camera"><button class="camera-picture" data-camera="${c.id}" aria-label="Open ${esc(c.name)} camera"><span class="preview-placeholder">Connecting to camera</span><img id="camera-${c.id}" alt="Current ${esc(c.name)} view"><span class="preview-badge"><span class="dot"></span><span id="badge-${c.id}">Preview</span></span><span class="expand-icon">${icon('expand')}</span></button><div class="camera-bottom"><div><h3>${esc(c.name)}</h3><p id="detail-${c.id}"></p></div><button class="camera-settings" data-zone="${c.id}" aria-label="Edit ${esc(c.name)} alert area">${icon('settings')}</button></div></article>`).join('');document.querySelectorAll('[data-camera]').forEach(b=>b.addEventListener('click',()=>openCamera(Number(b.dataset.camera))));document.querySelectorAll('[data-zone]').forEach(b=>b.addEventListener('click',()=>openZone(Number(b.dataset.zone))));}
-for(const c of state.cameras){$('detail-'+c.id).textContent=cameraDetail(c);$('badge-'+c.id).textContent=window.WatchyardLive?.label(c.id)||(c.online?'Preview':'Offline');const image=$('camera-'+c.id);if(currentView==='home'&&c.online&&!window.WatchyardLive?.playing(c.id)){image.onerror=()=>image.classList.add('unavailable');image.onload=()=>image.classList.remove('unavailable');image.src=`/api/cameras/${c.id}/snapshot?t=${tick}`;}else if(!c.online)image.classList.add('unavailable');}if(activeCamera&&$('camera-dialog').open)updateExpanded();window.WatchyardLive?.sync();}
-function openCamera(id){activeCamera=id;updateExpanded();$('camera-dialog').showModal();}
-function updateExpanded(){const c=state.cameras.find(c=>c.id===activeCamera);if(!c)return;$('camera-title').textContent=c.name;$('expanded-status').textContent=cameraDetail(c);$('expanded-time').textContent=c.online?'Live video has a short delay.':'Waiting for the camera to reconnect';if(c.online){if(!window.WatchyardLive?.expandedPlaying())$('expanded-camera').src=`/api/cameras/${c.id}/snapshot?t=${tick}`;}else $('expanded-camera').removeAttribute('src');}
-async function refresh(){if(!signedIn||busy)return;busy=true;try{[state,events,diagnostics]=await Promise.all([api('/api/status'),api('/api/events'),api('/api/diagnostics')]);renderReliability();if(admin){deviceInfo=await api('/api/devices');renderDevices();}tick++;renderCameras();renderEvents();if(window.WatchyardReplay)await window.WatchyardReplay.refreshSaved();applyAccess();if(linkedEvent&&window.WatchyardReplay){const id=linkedEvent;linkedEvent=null;window.WatchyardReplay.openEvent(id);}const online=state.cameras.filter(c=>c.online).length;const ready=online===state.cameras.length&&!state.detector_error&&!['loading','unavailable'].includes(state.detector)&&state.cameras.filter(c=>c.enabled).every(c=>Date.now()/1000-c.detected_at<12);$('connection-label').innerHTML=`<span class="dot ${ready?'online':'offline'}"></span>${ready?'Home connected':online+'/'+state.cameras.length+' cameras online'}`;$('monitoring-dot').className='dot '+(ready?'online':'offline');$('home-status').textContent=ready?'Keeping an eye on home':state.detector_error?'Detection needs attention':'Connecting your cameras';$('home-summary').textContent=ready?'All camera connections are healthy.':`${online} of ${state.cameras.length} cameras connected.`;$('today').textContent=new Date().toLocaleDateString([],{weekday:'long',month:'long',day:'numeric'});const muted=state.settings.muted_until>Date.now()/1000;const enabled=state.settings.enabled;$('enabled').checked=enabled;$('alert-state').textContent=!enabled?'Alerts are switched off.':muted?'Quiet until '+new Date(state.settings.muted_until*1000).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}):'Alerts are enabled.';$('quick-state').textContent=!enabled?'Alerts off':muted?'Quiet time':'Alerts on';$('quick-detail').textContent=muted?'Tap to resume alerts':'Per-camera alert rules';$('quick-mute').querySelector('strong').textContent=muted?'Resume alerts':'Quiet for an hour';$('telegram-status').textContent=state.telegram.error|| (state.telegram.paired?(state.telegram.accounts||1)+' approved account(s)':'Waiting for pairing');const botLink=$('open-telegram');botLink.hidden=!state.telegram.username;if(state.telegram.username)botLink.href='https://t.me/'+encodeURIComponent(state.telegram.username);botLink.classList.toggle('hidden',!state.telegram.username);$('telegram-dot').className='dot '+(state.telegram.paired&&!state.telegram.error?'online':'offline');$('test').disabled=!state.notifications.some(p=>p.destinations)||!admin;for(const provider of state.notifications){const key={'Pushover':'pushover','Custom webhook':'webhook'}[provider.name];if(key)$(key+'-status').textContent=provider.destinations?'Ready':provider.enabled?'Needs configuration':'Off';}$('detector').textContent=state.detector_error||state.detector;$('memory').textContent=state.memory_mb+' MB';if(document.activeElement!==$('confidence')){$('confidence').value=Math.round(state.settings.confidence*100);$('confidence-value').value=$('confidence').value+'%';}}catch(e){if(signedIn){$('connection-label').innerHTML='<span class="dot offline"></span>Connection lost';$('home-status').textContent='Watchyard is unavailable';$('home-summary').textContent='Check your private network connection.';}}finally{busy=false;}}
+function navigate(view,writeHash=true){if(view.startsWith('join='))view='home';if(view.startsWith('event='))view='activity';if(!['home','activity','settings'].includes(view))view='home';scrollPositions[currentView]=window.scrollY;currentView=view;document.querySelectorAll('.view').forEach(v=>v.classList.toggle('hidden',v.id!=='view-'+view));document.querySelectorAll('[data-nav]').forEach(b=>{if(b.dataset.nav===view)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current');});if(writeHash&&location.hash!=='#'+view)history.replaceState(null,'','#'+view);window.scrollTo(0,scrollPositions[view]||0);document.title=({home:'Cameras',activity:'Activity',settings:'Settings'}[view])+' | Watchyard';if(state){renderCameras();renderEvents(true);}}
+function emptyState(message) {
+  return `<div class="empty-state"><p>${esc(message)}</p></div>`;
+}
+
+function eventMarkup(event, compact = false) {
+  const date = new Date(event.created * 1000);
+  const time = date.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+  const stamp = compact ? date.toLocaleDateString([], {day: 'numeric', month: 'short'}) + ' ' + time : time;
+  const name = title(event.label);
+  return `<div class="event-row">
+    <button class="event" data-event="${event.id}" aria-label="View ${esc(name)} at ${esc(event.camera_name)}">
+      <img class="event-thumb" src="/api/events/${event.snapshot}" alt="" loading="lazy">
+      <span class="event-info"><strong>${esc(name)}</strong><small>${esc(event.camera_name)}</small></span>
+      <time class="event-time" datetime="${date.toISOString()}">${esc(stamp)}</time>
+    </button>
+    <button class="event-play" data-replay="${event.id}" aria-label="Watch ${esc(name)} replay at ${esc(event.camera_name)}">${icon('play')}</button>
+  </div>`;
+}
+
+function renderEvents(force = false) {
+  const signature = JSON.stringify([filter, cameraFilter, events.map(e => [e.id, e.status, e.feedback])]);
+  if (!force && signature === eventSignature) return;
+  eventSignature = signature;
+  $('latest-events').innerHTML = events.length
+    ? events.slice(0, 5).map(event => eventMarkup(event, true)).join('')
+    : emptyState('No detections recorded yet.');
+  const selected = events.filter(e =>
+    (!cameraFilter || String(e.camera) === cameraFilter) &&
+    (filter === 'all' || e.label === filter || (filter === 'pets' && ['dog', 'cat'].includes(e.label))));
+  const groups = new Map();
+  for (const event of selected) {
+    const day = new Date(event.created * 1000).toLocaleDateString([], {weekday: 'long', day: 'numeric', month: 'short', year: 'numeric'});
+    if (!groups.has(day)) groups.set(day, []);
+    groups.get(day).push(event);
+  }
+  $('events').innerHTML = groups.size ? [...groups].map(([day, items]) =>
+    `<h2 class="day-heading">${esc(day)}</h2><div class="grouped-list">${items.map(event => eventMarkup(event)).join('')}</div>`
+  ).join('') : emptyState('No events match these filters.');
+}
+
+function handleEventClick(event) {
+  const play = event.target.closest('[data-replay]');
+  if (play) {
+    window.WatchyardReplay.openEvent(play.dataset.replay);
+    return;
+  }
+  const button = event.target.closest('[data-event]');
+  const item = button && events.find(e => e.id === button.dataset.event);
+  if (!item) return;
+  activeEvent = item.id;
+  $('event-image').src = '/api/events/' + item.snapshot;
+  $('event-caption').textContent = `${title(item.label)} at ${item.camera_name}, ${new Date(item.created * 1000).toLocaleString()}. ${delivery(item.status)}.`;
+  renderReview(item);
+  $('image-dialog').showModal();
+}
+
+for (const id of ['events', 'latest-events']) $(id).addEventListener('click', handleEventClick);
+
+function cameraDetail(camera) {
+  if (!camera.online) return 'Camera offline';
+  if (!camera.enabled) return 'Detection paused';
+  if (camera.detections.length) {
+    return [...new Set(camera.detections.map(d => title(d.label)))].join(', ') + ' in view';
+  }
+  return '';
+}
+
+function renderCameras() {
+  const grid = $('camera-grid');
+  if (!grid.children.length) {
+    const options = state.cameras.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
+    $('camera-switch').innerHTML = options;
+    $('activity-camera').insertAdjacentHTML('beforeend', options);
+    grid.innerHTML = state.cameras.map(c => `<article class="camera">
+      <button class="camera-picture" data-camera="${c.id}" aria-label="Open ${esc(c.name)} camera">
+        <span id="placeholder-${c.id}" class="preview-placeholder">Connecting to camera</span>
+        <img id="camera-${c.id}" alt="">
+        <span class="preview-badge"><span class="dot"></span><span id="badge-${c.id}">Preview</span></span>
+        <span class="expand-icon">${icon('expand')}</span>
+      </button>
+      <div class="camera-bottom"><div><h3>${esc(c.name)}</h3><p id="detail-${c.id}" hidden></p></div>
+        <button class="camera-settings" data-zone="${c.id}" aria-label="Edit ${esc(c.name)} alert area">${icon('settings')}</button>
+      </div>
+    </article>`).join('');
+    grid.querySelectorAll('button[data-camera]').forEach(button =>
+      button.addEventListener('click', () => openCamera(Number(button.dataset.camera))));
+    grid.querySelectorAll('[data-zone]').forEach(button =>
+      button.addEventListener('click', () => openZone(Number(button.dataset.zone))));
+  }
+  for (const camera of state.cameras) {
+    const detail = $('detail-' + camera.id);
+    detail.textContent = cameraDetail(camera);
+    detail.hidden = !detail.textContent;
+    $('badge-' + camera.id).textContent = camera.online ? (window.WatchyardLive?.label(camera.id) || 'Preview') : 'Offline';
+    $('placeholder-' + camera.id).textContent = camera.online ? 'Loading preview' : 'Camera offline';
+    const image = $('camera-' + camera.id);
+    if (!camera.online) {
+      image.classList.add('unavailable');
+    } else if (currentView === 'home' && !window.WatchyardLive?.playing(camera.id)) {
+      image.onerror = () => image.classList.add('unavailable');
+      image.onload = () => {
+        if (state.cameras.find(c => c.id === camera.id)?.online) image.classList.remove('unavailable');
+      };
+      image.src = `/api/cameras/${camera.id}/snapshot?t=${tick}`;
+    }
+  }
+  if (activeCamera && $('camera-dialog').open) updateExpanded();
+  window.WatchyardLive?.sync();
+}
+
+function openCamera(id) {
+  activeCamera = id;
+  updateExpanded();
+  $('camera-dialog').showModal();
+}
+
+function updateExpanded() {
+  const camera = state.cameras.find(c => c.id === activeCamera);
+  if (!camera) return;
+  $('camera-title').textContent = camera.name;
+  $('camera-switch').value = String(camera.id);
+  $('expanded-status').textContent = cameraDetail(camera);
+  $('expanded-time').textContent = camera.online ? '' : 'Waiting for the camera to reconnect';
+  if (!camera.online) {
+    $('expanded-camera').removeAttribute('src');
+    $('expanded-live-label').textContent = 'Offline';
+  } else if (!window.WatchyardLive?.expandedPlaying()) {
+    $('expanded-camera').src = `/api/cameras/${camera.id}/snapshot?t=${tick}`;
+  }
+}
+
+$('camera-switch').addEventListener('change', event => {
+  activeCamera = Number(event.target.value);
+  window.WatchyardLive?.retry();
+  updateExpanded();
+});
+$('activity-camera').addEventListener('change', event => {
+  cameraFilter = event.target.value;
+  renderEvents();
+});
+$('camera-activity').addEventListener('click', () => {
+  cameraFilter = String(activeCamera);
+  $('activity-camera').value = cameraFilter;
+  $('camera-dialog').close();
+  navigate('activity');
+});
+
+async function refresh(){if(!signedIn||busy)return;busy=true;try{[state,events,diagnostics]=await Promise.all([api('/api/status'),api('/api/events'),api('/api/diagnostics')]);renderReliability();if(admin){deviceInfo=await api('/api/devices');renderDevices();}tick++;renderCameras();renderEvents();if(window.WatchyardReplay)await window.WatchyardReplay.refreshSaved();applyAccess();if(linkedEvent&&window.WatchyardReplay){const id=linkedEvent;linkedEvent=null;window.WatchyardReplay.openEvent(id);}const online=state.cameras.filter(c=>c.online).length;
+const count=state.cameras.length;
+const analysing=state.cameras.filter(c=>c.enabled&&c.online);
+const starting=state.detector==='loading'&&!state.detector_error;
+const healthy=!state.detector_error&&!['loading','unavailable'].includes(state.detector)&&analysing.every(c=>Date.now()/1000-c.detected_at<12);
+const connection=$('connection-label');
+connection.innerHTML=`<span class="dot ${online===count?'online':'offline'}"></span>${online===count?'Connected':'Camera offline'}`;
+$('home-status').textContent=`${online} of ${count} cameras online`+(starting?' · Starting detection':healthy?'':' · Detection needs attention');
+const muted=state.settings.muted_until>Date.now()/1000;const enabled=state.settings.enabled;$('enabled').checked=enabled;$('alert-state').textContent=!enabled?'Alerts are switched off.':muted?'Quiet until '+new Date(state.settings.muted_until*1000).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}):'Alerts are enabled.';$('quick-state').textContent=!enabled?'Alerts off':muted?'Quiet time':'Alerts on';$('quick-detail').textContent=muted?'Notifications paused':'Alert settings';$('quick-mute').querySelector('strong').textContent=muted?'Resume alerts':'Mute for 1 hour';$('telegram-status').textContent=state.telegram.error|| (state.telegram.paired?(state.telegram.accounts||1)+' approved account(s)':'Waiting for pairing');const botLink=$('open-telegram');botLink.hidden=!state.telegram.username;if(state.telegram.username)botLink.href='https://t.me/'+encodeURIComponent(state.telegram.username);botLink.classList.toggle('hidden',!state.telegram.username);$('telegram-dot').className='dot '+(state.telegram.paired&&!state.telegram.error?'online':'offline');$('test').disabled=!state.notifications.some(p=>p.destinations)||!admin;for(const provider of state.notifications){const key={'Pushover':'pushover','Custom webhook':'webhook'}[provider.name];if(key)$(key+'-status').textContent=provider.destinations?'Ready':provider.enabled?'Needs configuration':'Off';}$('detector').textContent=state.detector_error||state.detector;$('memory').textContent=state.memory_mb+' MB';if(document.activeElement!==$('confidence')){$('confidence').value=Math.round(state.settings.confidence*100);$('confidence-value').value=$('confidence').value+'%';}}catch(e){if(signedIn){$('connection-label').innerHTML='<span class="dot offline"></span>Connection lost';$('home-status').textContent='Connection lost. Check your network and refresh.';}}finally{busy=false;}}
 function drawZone(){const canvas=$('zone-canvas'),ctx=canvas.getContext('2d');ctx.clearRect(0,0,960,540);if(zoneImage.complete&&zoneImage.naturalWidth)ctx.drawImage(zoneImage,0,0,960,540);if(points.length){ctx.beginPath();points.forEach(([x,y],i)=>i?ctx.lineTo(x*960,y*540):ctx.moveTo(x*960,y*540));if(points.length>2)ctx.closePath();ctx.fillStyle='rgba(0,122,255,.24)';ctx.fill();ctx.strokeStyle='#75c4ff';ctx.lineWidth=3;ctx.stroke();for(const [x,y] of points){ctx.beginPath();ctx.arc(x*960,y*540,7,0,2*Math.PI);ctx.fillStyle='#fff';ctx.fill();}}$('zone-instruction').textContent=points.length?(points.length<3?'Add at least three points before saving.':`${points.length} boundary points. Only objects entering this area will alert.`):'Full view selected. Tap the picture to draw a boundary.';}
 function openZone(id){if(!admin)return;editing=state.cameras.find(c=>c.id===id);points=editing.zone.map(p=>[...p]);$('zone-title').textContent=editing.name;$('camera-enabled').checked=editing.enabled;document.querySelectorAll('input[name=label]').forEach(i=>i.checked=editing.labels.includes(i.value));zoneImage=new Image();zoneImage.onload=drawZone;zoneImage.src=`/api/cameras/${id}/snapshot?t=${Date.now()}`;$('zone-dialog').showModal();drawZone();}
 $('zone-canvas').addEventListener('click',e=>{if(points.length>=20){$('zone-instruction').textContent='Use at most 20 boundary points.';return;}const r=e.target.getBoundingClientRect();points.push([(e.clientX-r.left)/r.width,(e.clientY-r.top)/r.height]);drawZone();});
@@ -29,7 +176,7 @@ $('reset-zone').addEventListener('click',()=>{points=[];drawZone();});$('undo-zo
 $('zone-form').addEventListener('submit',async e=>{e.preventDefault();if(points.length&&points.length<3){$('zone-instruction').textContent='Add three points or choose Full view.';return;}try{await api('/api/cameras/'+editing.id,{enabled:$('camera-enabled').checked,labels:[...document.querySelectorAll('input[name=label]:checked')].map(i=>i.value),zone:points});$('zone-dialog').close();notice('Alert area saved');await refresh();}catch(e){$('zone-instruction').textContent=e.message;}});
 function resume(){return action('/api/controls',{enabled:true,mute_minutes:0},'Alerts resumed');}
 function quiet(){return action('/api/controls',{mute_minutes:60},'Quiet time enabled for one hour');}
-$('mute').addEventListener('click',quiet);$('resume').addEventListener('click',resume);$('quick-mute').addEventListener('click',()=>state.settings.muted_until>Date.now()/1000?resume():quiet());$('quick-alerts').addEventListener('click',()=>state.settings.muted_until>Date.now()/1000?resume():navigate('settings'));
+$('mute').addEventListener('click',quiet);$('resume').addEventListener('click',resume);$('quick-mute').addEventListener('click',()=>state.settings.muted_until>Date.now()/1000?resume():quiet());$('quick-alerts').addEventListener('click',()=>navigate('settings'));
 $('enabled').addEventListener('change',e=>action('/api/controls',{enabled:e.target.checked}));$('test').addEventListener('click',()=>action('/api/test-notification',{},'Test notification sent'));$('confidence').addEventListener('input',e=>$('confidence-value').value=e.target.value+'%');$('confidence').addEventListener('change',e=>action('/api/controls',{confidence:Number(e.target.value)/100},'Detection threshold saved'));$('refresh').addEventListener('click',()=>{window.WatchyardLive?.retry();refresh();});document.querySelectorAll('[data-filter]').forEach(b=>b.addEventListener('click',()=>{filter=b.dataset.filter;document.querySelectorAll('[data-filter]').forEach(x=>x.setAttribute('aria-pressed',x===b?'true':'false'));renderEvents(true);}));document.querySelectorAll('[data-nav]').forEach(b=>b.addEventListener('click',()=>navigate(b.dataset.nav)));window.addEventListener('hashchange',()=>{const hash=location.hash.slice(1);if(hash.startsWith('event='))linkedEvent=hash.slice(6);navigate(hash,false);if(linkedEvent&&signedIn)refresh();});document.querySelectorAll('a[href="#home"]').forEach(a=>a.addEventListener('click',e=>{e.preventDefault();navigate('home');}));
 async function enter(){const session=await api('/api/session');if(!session.authenticated){showLogin();return;}signedIn=true;localDevice=session.local;admin=session.device?.role==='admin';applyAccess();$('login-screen').classList.add('hidden');$('app-shell').classList.remove('hidden');$('sign-out').classList.toggle('hidden',localDevice);navigate(location.hash.slice(1)||'home');await refresh();}
 $('login-form').addEventListener('submit',async e=>{e.preventDefault();$('login-button').disabled=true;$('login-error').textContent='';try{await api('/api/login',{code:$('access-code').value,name:$('device-name').value.trim()||'New browser'});$('access-code').value='';await enter();}catch(e){$('login-error').textContent=e.message;}finally{$('login-button').disabled=false;}});$('sign-out').addEventListener('click',async()=>{try{await api('/api/logout',{});showLogin();}catch(e){notice(e.message);}});

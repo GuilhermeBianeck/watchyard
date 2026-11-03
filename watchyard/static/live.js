@@ -44,7 +44,14 @@
  function label(video,text){
   const s=current(video);if(s)s.label=text;
   if(video===expanded)$('expanded-live-label').textContent=text;
-  else{const badge=$('badge-'+video.dataset.camera);if(badge)badge.textContent=text;}
+  else {
+   const badge=$('badge-'+video.dataset.camera);
+   if(badge) {
+    const live=text.startsWith('Live');
+    badge.textContent=state?.cameras.find(c=>c.id===Number(video.dataset.camera))?.online?(live?'Live':text):'Offline';
+    badge.parentElement.dataset.playing=String(live);
+   }
+  }
  }
  function stop(video){
   const s=current(video);if(!s)return;
@@ -149,7 +156,8 @@
  $('go-live').addEventListener('click',()=>{stop(expanded);retries.delete(expanded);sync();});
  window.WatchyardLive={sync,reset,retry(){reset();sync();},label(id){
   const video=$('camera-'+id)?.closest('.camera-picture')?.querySelector('video');
-  return current(video)?.label;
+  const text=current(video)?.label;
+  return text?.startsWith('Live')?'Live':text;
  },playing(id){
   const video=$('camera-'+id)?.closest('.camera-picture')?.querySelector('video');
   return Boolean(video&&current(video)?.playing&&!video.paused);
