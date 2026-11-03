@@ -6,6 +6,7 @@ import threading
 import time
 import uuid
 
+from .capture import Camera, read_frame
 from .runtime import Runtime
 from .sources import CameraSources
 
@@ -16,8 +17,11 @@ class LiveFeed:
     FPS = 10
     IDLE_SECONDS = 20
 
-    def __init__(self, camera, settings):
+    def __init__(self, camera, settings, capture=None):
         self.camera, self.settings = camera, settings
+        self.capture = capture
+        self.shared_failed = False
+        self.shared_rate = None
         self.directory = settings.path / 'live' / str(camera)
         self.directory.mkdir(parents=True, mode=0o700, exist_ok=True)
         self.lock = threading.RLock()
@@ -33,7 +37,7 @@ class LiveFeed:
         for f in self.directory.iterdir():
             if f.is_file(): f.unlink(missing_ok=True)
 
-    def command(self):
+    def command(self, shared_rate=None):
         url = CameraSources(self.settings).stream(self.camera)
         args = [shutil.which('ffmpeg') or 'ffmpeg', '-nostdin', '-hide_banner', '-loglevel', 'error',
                 '-rtsp_transport', 'tcp', '-timeout', '10000000',
@@ -51,6 +55,12 @@ class LiveFeed:
                  '-hls_flags', 'delete_segments+omit_endlist+independent_segments+temp_file',
                  '-hls_segment_filename', str(self.directory / (self.generation + '-%06d.ts')),
                  '-y', str(self.directory / 'index.m3u8')]
+        if shared_rate is not None:
+            input_end = args.index('-i') + 2
+            args[input_end:input_end] = ['-map', '0:v:0']
+            args += ['-map', '0:v:0', '-an', '-sn', '-vf',
+                     f'fps={shared_rate},scale={Camera.WIDTH}:{Camera.HEIGHT}',
+                     '-pix_fmt', 'bgr24', '-f', 'rawvideo', 'pipe:1']
         return args
 
     def running(self):
@@ -61,24 +71,51 @@ class LiveFeed:
             now = time.monotonic()
             self.requested = now
             index = self.directory / 'index.m3u8'
+            rate = self.settings.snapshot()['inference_fps'] if self.capture else None
             stale = self.running() and now - self.started > 12 and (
                 not index.exists() or time.time() - index.stat().st_mtime > 8)
-            if stale: self.close()
-            if self.running() or now < self.retry_after: return
+            if stale or (self.running() and self.shared_rate is not None and rate != self.shared_rate):
+                self.shared_failed |= stale and self.shared_rate is not None
+                self.close()
+            if self.running() or now < self.retry_after:
+                return
             if self.process is not None:
-                # Failed hardware startup gets one software fallback on the next attempt.
-                if not index.exists(): self.software = True
+                if self.shared_rate is not None:
+                    self.shared_failed = True
+                elif not index.exists():
+                    self.software = True
                 self.close()
             self.clear_files()
             self.generation = uuid.uuid4().hex[:12]
             self.started = now
             self.retry_after = now + 3
+            self.shared_rate = rate if not self.shared_failed else None
             try:
-                # Never log subprocess arguments or stderr: the RTSP URL contains credentials.
-                self.process = subprocess.Popen(self.command(), stdin=subprocess.DEVNULL,
-                                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                # Do not log subprocess arguments or stderr. The RTSP URL contains credentials.
+                pipe = subprocess.PIPE if self.shared_rate is not None else subprocess.DEVNULL
+                proc = subprocess.Popen(self.command(self.shared_rate), stdin=subprocess.DEVNULL,
+                                        stdout=pipe, stderr=subprocess.DEVNULL,
+                                        bufsize=Camera.WIDTH * Camera.HEIGHT * 3)
+                self.process = proc
+                if self.shared_rate is not None:
+                    threading.Thread(target=self.read_shared, args=(proc,),
+                                     name=f'live-analysis-{self.camera}', daemon=True).start()
             except OSError:
                 self.process = None
+                self.shared_failed |= self.shared_rate is not None
+
+    def read_shared(self, proc):
+        try:
+            with proc.stdout as stream:
+                while (frame := read_frame(stream)) is not None:
+                    with self.lock:
+                        if self.process is not proc:
+                            break
+                        if (self.directory / 'index.m3u8').exists():
+                            wanted = time.monotonic() - self.requested <= self.IDLE_SECONDS
+                            self.capture.publish_shared(proc, frame, wanted=wanted)
+        finally:
+            self.capture.release_shared(proc)
 
     def playlist(self, wait=10):
         self.ensure()
@@ -109,14 +146,21 @@ class LiveFeed:
 
     def reap(self):
         with self.lock:
-            if self.process is not None and time.monotonic() - self.requested > self.IDLE_SECONDS:
-                self.close()
-                self.clear_files()
+            idle = time.monotonic() - self.requested
+            if self.process is None or idle <= self.IDLE_SECONDS:
+                return
+            if (self.shared_rate is not None and self.running()
+                    and not self.capture.resume_local(self.process) and idle <= self.IDLE_SECONDS + 12):
+                return
+            self.close()
+            self.clear_files()
 
     def close(self):
         with self.lock:
             proc, self.process = self.process, None
             if proc is not None:
+                if self.shared_rate is not None:
+                    self.capture.release_shared(proc)
                 try:
                     proc.terminate()
                     proc.wait(timeout=3)
@@ -127,9 +171,12 @@ class LiveFeed:
 
 
 class Live:
-    def __init__(self, settings, stop):
+    def __init__(self, settings, stop, cameras=None):
         self.stop = stop
-        self.feeds = {i: LiveFeed(i, settings) for i in (c['id'] for c in settings.snapshot()['cameras'])}
+        self.feeds = {
+            c['id']: LiveFeed(c['id'], settings, (cameras or {}).get(c['id']) if c.get('shared_ingest') else None)
+            for c in settings.snapshot()['cameras']
+        }
         self.thread = None
 
     def start(self):

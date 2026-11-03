@@ -71,3 +71,35 @@ HLS.js light bundle shipped with the app; no CDN or additional service is used.
 The content policy allows local media and the local blob media buffers needed
 by browser playback. Script and network sources remain restricted to this app.
 See THIRD_PARTY.md and the bundled upstream license notices.
+
+## Shared ingest pilot
+
+Set `"shared_ingest": true` on a camera in `settings.json` and restart Watchyard
+to try the shared path. It uses one FFmpeg input and decoder to produce both
+H.264 HLS and sampled analysis frames while the feed is being watched. The
+capture worker stays available until the shared worker produces both outputs.
+When viewers leave, the dedicated worker resumes before the live worker closes,
+with a bounded handoff. A failed shared worker restores dedicated capture and
+falls back to separate live encoding on the next request. Remove the setting
+and restart to return to the standard path.
+
+Run `.venv/bin/python -m scripts.benchmark_ingest 1 --seconds 20` from the repo
+to compare both layouts for camera ID 1. Add `--reverse` to run the shared case
+first. The probe temporarily opens additional recorder connections and uses a
+temporary HLS directory. It reports FFmpeg process RSS and CPU, analysis rate,
+and the time until both outputs are available. Run it on one camera at a time.
+
+On Portão, the shared command with HLS mapped first measured 84 MiB of FFmpeg
+RSS versus 137 MiB for two workers. Both produced about 0.99 analysis fps and
+started in about 2.6 seconds. CPU measured 4.7% versus 5.3% of one core during
+that short run. These are worker measurements, not savings for the whole Mac.
+
+A separate language benchmark compared 80 warm calls on the same prepared
+640 × 640 camera frame. Direct Swift Core ML prediction had a 3.07 ms median
+and 3.90 ms p95. Python through Ultralytics and Core ML had a 9.48 ms median
+and 10.15 ms p95. Both returned the same class, confidence and box for that
+frame. Swift reused the prepared input and did not run the production
+preprocessing or tracking loop. At around four analyses per second total, the
+measured difference represents about 26 ms of call time per second. It is not
+a whole-service CPU benchmark. This result supports keeping the existing
+application and improving its media pipeline first.

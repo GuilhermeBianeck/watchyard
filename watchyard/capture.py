@@ -20,6 +20,8 @@ class Camera:
         self.captured_at = 0
         self.sequence = 0
         self.process = None
+        self.shared_source = None
+        self.local_requested = False
         self.mode = "starting"
         self.reconnects = 0
         self.overlays = Overlays()
@@ -36,11 +38,44 @@ class Camera:
         with self.lock:
             return self.frame, self.captured_at, self.sequence
 
+    def publish_shared(self, source, frame, *, wanted):
+        with self.lock:
+            if wanted:
+                self.shared_source = source
+                self.local_requested = False
+            if self.shared_source is source:
+                self._publish(frame)
+
+    def resume_local(self, source):
+        with self.lock:
+            if self.shared_source is not source:
+                return True
+            self.local_requested = True
+            return False
+
+    def release_shared(self, source):
+        with self.lock:
+            if self.shared_source is source:
+                self.shared_source = None
+                self.local_requested = False
+
+    def _publish(self, frame):
+        self.frame, self.captured_at = frame, time.time()
+        self.sequence += 1
+        self.last_error = None
+
+    def shared_only(self):
+        with self.lock:
+            return self.shared_source is not None and not self.local_requested
+
     def run(self):
         s = self.settings
         url = CameraSources(s).stream(self.id)
         hardware = Runtime.read().decoder == 'videotoolbox'
         while not self.stop.is_set():
+            if self.shared_only():
+                self.stop.wait(.15)
+                continue
             sampling = max(1, min(2, s.snapshot()['inference_fps']))
             reconfigured = False
             args = [shutil.which('ffmpeg') or 'ffmpeg', '-nostdin', '-hide_banner', '-loglevel', 'error', '-rtsp_transport', 'tcp', '-timeout', '10000000']
@@ -53,29 +88,23 @@ class Camera:
                 self.mode = 'VideoToolbox' if hardware else 'software'
                 size = self.WIDTH*self.HEIGHT*3
                 while not self.stop.is_set():
-                    if max(1, min(2, s.snapshot()['inference_fps'])) != sampling:
+                    if self.shared_only() or max(1, min(2, s.snapshot()['inference_fps'])) != sampling:
                         reconfigured = True
                         break
-                    parts, count = [], 0
-                    while count < size and not self.stop.is_set():
-                        chunk = self.process.stdout.read(size-count)
-                        if not chunk:
-                            break
-                        parts.append(chunk)
-                        count += len(chunk)
-                    if count != size:
+                    frame = read_frame(self.process.stdout)
+                    if frame is None:
                         break
-                    frame = np.frombuffer(b''.join(parts), dtype=np.uint8).reshape((self.HEIGHT,self.WIDTH,3)).copy()
                     with self.lock:
-                        self.frame, self.captured_at = frame, time.time()
-                        self.sequence += 1
-                    self.last_error = None
+                        if self.shared_source is None or self.local_requested:
+                            self.shared_source = None
+                            self.local_requested = False
+                            self._publish(frame)
                     got_frame = True
             except (OSError, ValueError):
                 self.mode = 'reconnecting'
             finally:
                 self.close()
-            if reconfigured:
+            if reconfigured or self.shared_only():
                 continue
             if not got_frame and hardware:
                 hardware = False
@@ -118,6 +147,15 @@ class Camera:
                 draw_detection(frame, d)
         ok, encoded = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
         return encoded.tobytes() if ok else None
+
+
+def read_frame(stream):
+    size = Camera.WIDTH * Camera.HEIGHT * 3
+    data = stream.read(size)
+    if len(data) != size:
+        return None
+    # The bytes own the pixels until the published NumPy view is released.
+    return np.frombuffer(data, dtype=np.uint8).reshape((Camera.HEIGHT, Camera.WIDTH, 3))
 
 
 def draw_detection(frame, detection):

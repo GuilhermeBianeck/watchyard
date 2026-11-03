@@ -128,3 +128,57 @@ def test_analysis_rate_is_persisted_validated_and_keeps_three_observations(tmp_p
     assert not tracker.update([d],1.2,[],window=3.5)
     assert len(tracker.update([d],2.4,[],window=3.5))==1
     assert not tracker.update([d],3.6,[],window=3.5)
+
+
+def test_shared_ingest_handoff_preserves_frames_until_local_capture_returns(tmp_path):
+    settings = Settings(tmp_path)
+    config = settings.snapshot()['cameras']
+    config[0]['shared_ingest'] = True
+    settings.save({'cameras': config})
+    service = Service(settings)
+    capture = service.cameras[1]
+    feed = service.live.feeds[1]
+    assert feed.capture is capture
+    assert service.live.feeds[2].capture is None
+    args = feed.command(shared_rate=1)
+    assert args.count('-i') == 1
+    assert args.count('0:v:0') == 2
+    assert args.index('hls') < args.index('rawvideo')
+
+    source = object()
+    capture.publish_shared(source, 'first', wanted=True)
+    assert capture.shared_only() and capture.latest()[0] == 'first'
+    assert not capture.resume_local(source)
+    assert not capture.shared_only()
+    capture.publish_shared(source, 'last', wanted=False)
+    assert capture.latest()[0] == 'last'
+    capture.release_shared(source)
+    capture.publish_shared(source, 'obsolete', wanted=False)
+    assert capture.latest()[0] == 'last'
+
+
+def test_failed_shared_process_falls_back_to_separate_live_encoding(tmp_path, monkeypatch):
+    import io
+
+    settings = Settings(tmp_path)
+    service = Service(settings)
+    feed = LiveFeed(1, settings, service.cameras[1])
+    calls = []
+
+    def spawn(args, **kwargs):
+        calls.append(args)
+        proc = Process()
+        proc.stdout = io.BytesIO()
+        return proc
+
+    monkeypatch.setattr('watchyard.live.subprocess.Popen', spawn)
+    feed.ensure()
+    first = feed.process
+    assert 'rawvideo' in calls[0]
+    first.code = 1
+    feed.retry_after = 0
+    feed.ensure()
+    assert feed.shared_failed
+    assert 'rawvideo' not in calls[1]
+    assert not service.cameras[1].shared_only()
+    feed.close()

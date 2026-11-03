@@ -28,8 +28,8 @@ class Service:
         self.stop = threading.Event()
         self.store = Store(settings.path)
         self.clips = Clips(settings,self.stop,self.store)
-        self.live = Live(settings,self.stop)
         self.cameras = {i:Camera(i,settings,self.stop) for i in (c['id'] for c in settings.snapshot()['cameras'])}
+        self.live = Live(settings,self.stop,self.cameras)
         self.trackers = {i:Tracker() for i in self.cameras}
         self.telegram = Telegram(settings,self)
         self.notifications = Notifications(settings,self.telegram)
