@@ -51,7 +51,7 @@ class Tracker:
         self.tracks = {}
         self.counter = 0
 
-    def update(self, detections, now, zone, confirmation=3):
+    def update(self, detections, now, zone, confirmation=3, window=3):
         self.tracks = {k:t for k,t in self.tracks.items() if now-t.last < 8}
         matched = set()
         events = []
@@ -82,7 +82,7 @@ class Tracker:
             foot = ((box[0]+box[2])/2, box[3])
             in_zone = inside(foot, zone)
             # Require repeated observations INSIDE the alert zone.
-            t.observations = [v for v in t.observations if now-v[0] < 3]
+            t.observations = [v for v in t.observations if now-v[0] < window]
             if in_zone:
                 t.observations.append((now, d['confidence']))
             else:

@@ -53,6 +53,18 @@ or management access and can revoke the device/account independently.
   delivery/retries pass verification. Actual phone/desktop accounts complete
   registration by opening the owner's invitation.
 
+## M6: Smooth live viewing and efficient analysis — implemented in 0.6
+
+As a homeowner, I can watch smooth live video while object analysis uses a lower
+independent rate, so that viewing quality is not tied to detector workload.
+
+- Stream visible cameras and expanded views at up to 720p/10 fps.
+- Share one encoder per camera between approved viewers and stop idle feeds.
+- Choose a 1/2 fps analysis target, preserving repeated-observation confirmation.
+- Keep playback, playlist and segment access under existing authentication.
+- Acceptance: native-HLS and Chrome playback, measured delivered rate, concurrent
+  analysis, viewer authorization and idle cleanup are verified locally.
+
 ## Alternative deployment — repository preparation
 
 Linux CPU runtime, explicit network configuration and a private Docker Compose

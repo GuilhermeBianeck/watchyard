@@ -25,6 +25,7 @@ class Camera:
         self.detected_at = 0
         self.inference_ms = 0
         self.detected_sequence = -1
+        self.analysed_frames = 0
         self.last_error = None
 
     def start(self):
@@ -42,10 +43,12 @@ class Camera:
         url = f"rtsp://{user}:{password}@{host}:554/Streaming/Channels/{self.id}02"
         hardware = Runtime.read().decoder == 'videotoolbox'
         while not self.stop.is_set():
+            sampling = max(1, min(2, s.snapshot()['inference_fps']))
+            reconfigured = False
             args = [shutil.which('ffmpeg') or 'ffmpeg', '-nostdin', '-hide_banner', '-loglevel', 'error', '-rtsp_transport', 'tcp', '-timeout', '10000000']
             if hardware:
                 args += ['-hwaccel', 'videotoolbox']
-            args += ['-i', url, '-an', '-sn', '-vf', f'fps=3,scale={self.WIDTH}:{self.HEIGHT}', '-pix_fmt', 'bgr24', '-f', 'rawvideo', 'pipe:1']
+            args += ['-i', url, '-an', '-sn', '-vf', f'fps={sampling:g},scale={self.WIDTH}:{self.HEIGHT}', '-pix_fmt', 'bgr24', '-f', 'rawvideo', 'pipe:1']
             got_frame = False
             try:
                 self.process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=self.WIDTH*self.HEIGHT*3)
@@ -61,6 +64,9 @@ class Camera:
                 self.mode = 'VideoToolbox' if hardware else 'software'
                 size = self.WIDTH*self.HEIGHT*3
                 while not self.stop.is_set():
+                    if max(1, min(2, s.snapshot()['inference_fps'])) != sampling:
+                        reconfigured = True
+                        break
                     parts, count = [], 0
                     while count < size and not self.stop.is_set():
                         chunk = self.process.stdout.read(size-count)
@@ -80,6 +86,8 @@ class Camera:
                 self.mode = 'reconnecting'
             finally:
                 self.close()
+            if reconfigured:
+                continue
             if not got_frame and hardware:
                 hardware = False
             self.reconnects += 1

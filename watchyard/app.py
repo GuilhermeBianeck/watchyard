@@ -30,6 +30,7 @@ class Controls(BaseModel):
     enabled: bool | None = None
     mute_minutes: int | None = Field(None,ge=0,le=1440)
     confidence: float | None = Field(None,ge=0.25,le=0.95)
+    inference_fps: Literal[1,2] | None = None
 
 
 class Login(BaseModel):
@@ -118,7 +119,7 @@ def create_app(service=None, run_service=True):
         if run_service:
             service.close()
 
-    app = FastAPI(title='Watchyard',version='0.5.1',lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
+    app = FastAPI(title='Watchyard',version='0.6.0',lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
     app.state.service = service
     app.add_middleware(TrustedHostMiddleware,allowed_hosts=list(runtime.allowed_hosts) if runtime.allowed_hosts else ['localhost','127.0.0.1','testserver',address,hostname,hostname.split('.')[0]+'.local',bonjour])
 
@@ -151,7 +152,7 @@ def create_app(service=None, run_service=True):
         response.headers['X-Content-Type-Options'] = 'nosniff'
         response.headers['X-Frame-Options'] = 'DENY'
         response.headers['Referrer-Policy'] = 'no-referrer'
-        response.headers['Content-Security-Policy'] = "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+        response.headers['Content-Security-Policy'] = "default-src 'self'; img-src 'self' data:; media-src 'self' blob:; style-src 'self'; script-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
         return response
 
     @app.get('/')
@@ -309,6 +310,22 @@ def create_app(service=None, run_service=True):
         if data is None:
             raise HTTPException(503,'Camera is reconnecting')
         return Response(data,media_type='image/jpeg')
+
+    @app.get('/api/cameras/{camera_id}/live/index.m3u8')
+    def live_playlist(camera_id:int):
+        feed=service.live.feeds.get(camera_id)
+        if feed is None:raise HTTPException(404)
+        text=feed.playlist()
+        if text is None:
+            return Response('Live video is connecting. Please retry.',status_code=503,headers={'Retry-After':'1'})
+        return Response(text,media_type='application/vnd.apple.mpegurl')
+
+    @app.get('/api/cameras/{camera_id}/live/{filename}')
+    def live_segment(camera_id:int,filename:str):
+        feed=service.live.feeds.get(camera_id)
+        path=feed.segment(filename) if feed else None
+        if path is None:raise HTTPException(404)
+        return FileResponse(path,media_type='video/mp2t')
 
     @app.get('/api/events/{filename}')
     def event_image(filename: str):

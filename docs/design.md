@@ -30,3 +30,11 @@ iOS layout. A separate dashboard of playback statistics or a fourth navigation
 tab would add weight without helping this task, so the existing three tabs stay.
 Loading, unavailable recordings, shorter clips and storage limits have explicit
 states. Preparation never claims a made-up percentage.
+
+Live viewing uses the same palette, native system typography and camera-first
+layout. Each visible camera tile becomes muted video with a small connection
+badge. Expanded views use native controls and a Go live action. The analysis
+rate lives beside the existing detection threshold in Settings. No new page or
+statistics panel is needed: the visible footage is the point of this change.
+Off-screen tiles and background tabs stop loading video; snapshots remain a
+fallback when streaming is unavailable.

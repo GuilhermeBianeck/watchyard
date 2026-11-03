@@ -11,7 +11,7 @@ DEFAULTS = {
     "enabled": True,
     "muted_until": 0,
     "retention_days": 7,
-    "inference_fps": 2,
+    "inference_fps": 1,
     "confidence": 0.55,
     "confirmation_frames": 3,
     "cameras": [

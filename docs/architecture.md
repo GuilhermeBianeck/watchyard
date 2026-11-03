@@ -28,3 +28,10 @@ poster in private `clips/`; the API serves authenticated byte ranges and downloa
 Kept clips survive event retention and cache eviction. The detector and Telegram
 delivery loops do not wait for replay conversion. See replay-and-clips.md for
 the tested recorder, resource limits and storage semantics.
+
+Version 0.6 separates live viewing from raw analysis capture. Authenticated HLS
+requests lazily start a shared FFmpeg encoder for that camera; a small private
+segment cache is served through the same API and gateway. Encoders stop after
+20 idle seconds. Native HLS or a locally bundled HLS.js player handles viewing.
+Analysis capture now samples at the chosen 1/2 fps, with detector scheduling and
+confirmation timing independent of live playback. See live-view.md.

@@ -14,6 +14,7 @@ from .telegram import Telegram
 from .policy import decision
 from .runtime import Runtime
 from .replay import Clips
+from .live import Live
 
 log = logging.getLogger('watchyard')
 
@@ -25,6 +26,7 @@ class Service:
         self.stop = threading.Event()
         self.store = Store(settings.path)
         self.clips = Clips(settings,self.stop)
+        self.live = Live(settings,self.stop)
         self.cameras = {i:Camera(i,settings,self.stop) for i in range(1,5)}
         self.trackers = {i:Tracker() for i in self.cameras}
         self.telegram = Telegram(settings,self)
@@ -37,6 +39,7 @@ class Service:
 
     def start(self):
         self.clips.start()
+        self.live.start()
         for camera in self.cameras.values():
             camera.start()
         self.telegram.start()
@@ -82,6 +85,7 @@ class Service:
                 if frame is None or time.time()-captured > 6 or sequence == camera.detected_sequence:
                     continue
                 start = time.perf_counter()
+                scheduled = time.monotonic()
                 try:
                     result = self.model.predict(frame, conf=config['confidence'], classes=[0,2,15,16], imgsz=640, verbose=False, **self.runtime.prediction_options())[0]
                     h,w = frame.shape[:2]
@@ -95,8 +99,10 @@ class Service:
                     camera.detections = detections
                     camera.detected_at = time.time()
                     camera.detected_sequence = sequence
+                    camera.analysed_frames += 1
                     camera.inference_ms = round((time.perf_counter()-start)*1000,1)
-                    events = self.trackers[c['id']].update(detections,time.monotonic(),c['zone'],config['confirmation_frames'])
+                    window=max(3,config['confirmation_frames']/config['inference_fps']+.5)
+                    events = self.trackers[c['id']].update(detections,time.monotonic(),c['zone'],config['confirmation_frames'],window=window)
                     for event in events:
                         self.record(c,frame,event,config)
                     self.detector_error = None
@@ -104,7 +110,7 @@ class Service:
                     self.detector_error = type(exc).__name__
                     log.error('Inference failed: %s',self.detector_error)
                     self.stop.wait(2)
-                next_due[c['id']] = time.monotonic()+1/max(0.5,config['inference_fps'])
+                next_due[c['id']] = scheduled+1/max(0.5,config['inference_fps'])
             self.stop.wait(0.02)
 
     def record(self, camera, frame, event, config):
@@ -129,14 +135,14 @@ class Service:
         cameras = []
         for c in config['cameras']:
             camera = self.cameras[c['id']]
-            cameras.append({**c,'online':now-camera.captured_at<12,'captured_at':camera.captured_at,'detected_at':camera.detected_at,'inference_ms':camera.inference_ms,'decoder':camera.mode,'reconnects':camera.reconnects,'error':camera.last_error,'detections':camera.detections if now-camera.detected_at<6 else []})
+            cameras.append({**c,'online':now-camera.captured_at<12,'captured_at':camera.captured_at,'detected_at':camera.detected_at,'inference_ms':camera.inference_ms,'analysed_frames':camera.analysed_frames,'decoder':camera.mode,'reconnects':camera.reconnects,'error':camera.last_error,'detections':camera.detections if now-camera.detected_at<6 else []})
         process = psutil.Process()
         children = process.children(recursive=True)
         ram = process.memory_info().rss
         for child in children:
             try: ram += child.memory_info().rss
             except psutil.Error: pass
-        return {'version':'0.5.1','started':self.started,'detector':self.detector,'detector_error':self.detector_error,'cameras':cameras,'settings':config,'telegram':{'paired':self.telegram.paired(),'accounts':len(self.telegram.members.recipients()),'username':self.telegram.username,'error':self.telegram.last_error,'last_success':self.telegram.last_success,'last_send_at':self.telegram.last_send_at,'delivery_error':self.telegram.last_delivery_error,'poll_error':self.telegram.last_poll_error},'memory_mb':round(ram/1024**2),'system_memory_percent':psutil.virtual_memory().percent}
+        return {'version':'0.6.0','started':self.started,'detector':self.detector,'detector_error':self.detector_error,'cameras':cameras,'settings':config,'live':self.live.status(),'telegram':{'paired':self.telegram.paired(),'accounts':len(self.telegram.members.recipients()),'username':self.telegram.username,'error':self.telegram.last_error,'last_success':self.telegram.last_success,'last_send_at':self.telegram.last_send_at,'delivery_error':self.telegram.last_delivery_error,'poll_error':self.telegram.last_poll_error},'memory_mb':round(ram/1024**2),'system_memory_percent':psutil.virtual_memory().percent}
 
     def status_text(self):
         status = self.status()
@@ -165,6 +171,7 @@ class Service:
 
     def close(self):
         self.stop.set()
+        self.live.close()
         self.clips.close()
         for camera in self.cameras.values():
             camera.close()

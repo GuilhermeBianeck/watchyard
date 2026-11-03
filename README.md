@@ -91,3 +91,12 @@ clip** to preserve it under Activity → Saved clips. New Telegram alerts link t
 the authenticated replay page on home Wi-Fi. Clips are prepared one at a time;
 continuous recording remains on the NVR. See [replay and clips](docs/replay-and-clips.md)
 for quality, retention, storage limits and recorder requirements.
+
+## Live video and analysis rate (0.6)
+
+Visible Home tiles and the expanded camera player now stream live video at up to
+720p/10 fps. Live feeds are shared between viewers and stop when no longer watched.
+Detection runs independently at a selectable 1 or 2 fps per camera under Settings
+→ Detection. Lower rates reduce analysis work but can miss brief movement. The
+three-second status refresh no longer limits the displayed video frame rate.
+See [live view](docs/live-view.md) for buffering, resource use and browser support.
