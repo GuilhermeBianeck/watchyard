@@ -9,7 +9,7 @@ def validate_inventory(cameras):
     for camera in cameras:
         if not isinstance(camera, dict) or set(camera) - {
             'id', 'name', 'enabled', 'zone', 'labels', 'alert_modes', 'schedule', 'channel', 'replay_track',
-            'ignore_boxes', 'shared_ingest'
+            'ignore_boxes', 'shared_ingest', 'plate_zone'
         }:
             raise ValueError('Unknown camera fields; keep stream URLs in secrets.json')
         camera_id = camera.get('id')
@@ -24,6 +24,12 @@ def validate_inventory(cameras):
                 raise ValueError(f'{key} must be a positive integer')
         if type(camera.get('shared_ingest', False)) is not bool:
             raise ValueError('shared_ingest must be true or false')
+        if 'plate_zone' in camera:
+            rect = camera['plate_zone']
+            if (not isinstance(rect, list) or len(rect) != 4
+                    or any(type(v) not in (int, float) or not 0 <= v <= 1 for v in rect)
+                    or rect[0] >= rect[2] or rect[1] >= rect[3]):
+                raise ValueError('Plate zones need four ordered coordinates between 0 and 1')
         ignored = camera.get('ignore_boxes', {})
         if not isinstance(ignored, dict):
             raise ValueError('ignore_boxes must map object labels to lists of rectangles')

@@ -25,7 +25,7 @@ function eventMarkup(event, compact = false) {
   return `<div class="event-row">
     <button class="event" data-event="${event.id}" aria-label="View ${esc(name)} at ${esc(event.camera_name)}">
       <img class="event-thumb" src="/api/events/${event.snapshot}" alt="" loading="lazy">
-      <span class="event-info"><strong>${esc(name)}</strong><small>${esc(event.camera_name)}</small></span>
+      <span class="event-info"><strong>${esc(name)}</strong><small>${esc(event.camera_name)}${event.plate ? ' · ' + esc(event.vehicle_name || event.plate) : ''}</small></span>
       <time class="event-time" datetime="${date.toISOString()}">${esc(stamp)}</time>
     </button>
     <button class="event-play" data-replay="${event.id}" aria-label="Watch ${esc(name)} replay at ${esc(event.camera_name)}">${icon('play')}</button>
@@ -33,7 +33,7 @@ function eventMarkup(event, compact = false) {
 }
 
 function renderEvents(force = false) {
-  const signature = JSON.stringify([filter, cameraFilter, events.map(e => [e.id, e.status, e.feedback])]);
+  const signature = JSON.stringify([filter, cameraFilter, events.map(e => [e.id, e.status, e.feedback, e.plate, e.vehicle_name])]);
   if (!force && signature === eventSignature) return;
   eventSignature = signature;
   $('latest-events').innerHTML = events.length
@@ -64,7 +64,7 @@ function handleEventClick(event) {
   if (!item) return;
   activeEvent = item.id;
   $('event-image').src = '/api/events/' + item.snapshot;
-  $('event-caption').textContent = `${title(item.label)} at ${item.camera_name}, ${new Date(item.created * 1000).toLocaleString()}. ${delivery(item.status)}.`;
+  $('event-caption').textContent = `${title(item.label)} at ${item.camera_name}, ${new Date(item.created * 1000).toLocaleString()}. ${delivery(item.status)}.${item.plate ? ` Plate: ${item.plate}${item.vehicle_name ? ` (${item.vehicle_name})` : ''}.` : ''}`;
   renderReview(item);
   $('image-dialog').showModal();
 }

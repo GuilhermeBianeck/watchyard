@@ -25,6 +25,13 @@ if not runtime.exists():
 python = runtime/'bin/python'
 subprocess.run([str(python),'-m','pip','install','--no-deps','--no-build-isolation','--force-reinstall',str(root)],check=True)
 subprocess.run([str(python),'-c','from watchyard.config import Settings; from watchyard.store import Store; Store(Settings().path)'],check=True)
+if subprocess.check_output([str(python), '-c',
+        "from watchyard.config import Settings; print(any(c.get('plate_zone') for c in Settings().snapshot()['cameras']))"
+        ], env=os.environ | {'WATCHYARD_DATA': str(data)}).strip() == b'True':
+    plate_helper = runtime/'plate-ocr'
+    staged = runtime/'plate-ocr.new'
+    subprocess.run(['swiftc', '-O', str(root/'scripts/plate_ocr.swift'), '-o', str(staged)], check=True)
+    staged.replace(plate_helper)
 logs = data/'logs'; logs.mkdir(exist_ok=True)
 gateway = data/'gateway.cjs'
 shutil.copyfile(root/'watchyard/gateway.cjs',gateway)

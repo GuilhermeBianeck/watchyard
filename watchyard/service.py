@@ -17,6 +17,7 @@ from .policy import decision
 from .runtime import Runtime
 from .replay import Clips
 from .live import Live
+from .plates import Plates
 
 log = logging.getLogger('watchyard')
 
@@ -27,6 +28,7 @@ class Service:
         self.runtime = Runtime.read()
         self.stop = threading.Event()
         self.store = Store(settings.path)
+        self.plates = Plates(settings, self.store, self.stop)
         self.clips = Clips(settings,self.stop,self.store)
         self.cameras = {i:Camera(i,settings,self.stop) for i in (c['id'] for c in settings.snapshot()['cameras'])}
         self.live = Live(settings,self.stop,self.cameras)
@@ -42,6 +44,7 @@ class Service:
 
     def start(self):
         self.clips.start()
+        self.plates.start()
         self.live.start()
         for camera in self.cameras.values():
             camera.start()
@@ -140,6 +143,8 @@ class Service:
             status = 'unpaired'
         event_id = self.store.add(camera,event['label'],event['confidence'],name,status,reason,mode,
                                   first_seen=first_seen,last_seen=last_seen)
+        if event['label'] == 'car':
+            self.plates.submit(camera, event_id)
         log.info('Confirmed %s on camera %s (%s)',event['label'],camera['id'],status)
         return event_id
 

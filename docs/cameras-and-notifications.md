@@ -83,3 +83,25 @@ label when its box overlaps the reference with an intersection over union of
 at least 55%. This affects both alerts and overlays. Keep these boxes tight and
 remove them if the camera moves or the scene changes. A real object of the same
 label with a matching box would also be ignored.
+
+## Plate reading pilot on macOS
+
+Add a `plate_zone` rectangle to one recorder camera in the private
+`settings.json` to enable plate reading there. Coordinates are normalized
+left, top, right and bottom on the main stream. Aim it at the part of the
+driveway where vehicles pass close to the camera. The installer builds the
+local OCR helper with Swift and Apple Vision when a plate zone is configured.
+Remove the zone and restart to disable the pilot.
+
+After a confirmed vehicle event, Watchyard opens the high-resolution stream
+briefly. It saves a reading only if at least two distinct frames agree and
+there is no second recurring candidate. An empty result is normal when a
+plate is too far away, obscured or already out of frame. A reading is an OCR
+observation near the event. Verify it in the footage if multiple vehicles
+were present. The burst is temporary and plates expire with event history.
+
+Managers can see results in Activity and in the event detail. To show a
+vehicle name beside a reading, add a private `PLATE_ALIASES` map to
+`secrets.json`, for example `{"PLATE_ALIASES": {"AB-12-CD": "Family car"}}`.
+Restart after editing it. This does not infer a vehicle owner. OCR results
+stay out of notifications and CSV export.

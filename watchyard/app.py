@@ -135,6 +135,7 @@ def create_app(service=None, run_service=True):
             except ValueError:
                 return Response('Home network access only',status_code=403)
         principal=access.principal(request)
+        request.state.principal = principal
         if request.url.path.startswith('/api/') and request.url.path not in ('/api/session','/api/login'):
             if not principal:
                 return JSONResponse({'detail':'Sign in with your dashboard code'},status_code=401)
@@ -229,9 +230,19 @@ def create_app(service=None, run_service=True):
         ready = status['detector'] not in ('loading','unavailable') and not status['detector_error'] and all(c['online'] and time.time()-c['detected_at']<12 for c in status['cameras'] if c['enabled'])
         return Response('ready' if ready else 'starting or degraded',status_code=200 if ready else 503)
 
+    def public_event(event, owner):
+        if not owner:
+            event.pop('plate', None)
+        elif event.get('plate'):
+            aliases = service.settings.secret('PLATE_ALIASES', {})
+            if isinstance(aliases, dict) and isinstance(aliases.get(event['plate']), str):
+                event['vehicle_name'] = aliases[event['plate']]
+        return event
+
     @app.get('/api/events')
-    def events():
-        return service.store.recent(80)
+    def events(request: Request):
+        owner = request.state.principal['role'] == 'admin'
+        return [public_event(event, owner) for event in service.store.recent(80)]
 
     @app.get('/api/events/export')
     def export_events():
@@ -243,10 +254,10 @@ def create_app(service=None, run_service=True):
         return Response(stream.getvalue(),media_type='text/csv',headers={'Content-Disposition':'attachment; filename="watchyard-events.csv"'})
 
     @app.get('/api/events/{event_id}/details')
-    def event_details(event_id:str):
+    def event_details(event_id:str, request: Request):
         event=service.store.event(event_id)
         if event is None:raise HTTPException(404,'This alert is no longer in history. Check Saved clips in Activity.')
-        return event
+        return public_event(event, request.state.principal['role'] == 'admin')
 
     @app.post('/api/events/{event_id}/replay')
     def request_replay(event_id:str):

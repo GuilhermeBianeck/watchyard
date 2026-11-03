@@ -18,7 +18,7 @@ class Store:
             label TEXT, confidence REAL, snapshot TEXT, status TEXT,
             attempts INTEGER DEFAULT 0, next_try REAL DEFAULT 0, detail TEXT DEFAULT '')""")
         columns={r[1] for r in self.db.execute('PRAGMA table_info(events)')}
-        for name,definition in [('feedback',"TEXT DEFAULT 'unreviewed'"),('sent_at','REAL'),('notify_mode',"TEXT DEFAULT ''"),('first_seen','REAL'),('last_seen','REAL')]:
+        for name,definition in [('feedback',"TEXT DEFAULT 'unreviewed'"),('sent_at','REAL'),('notify_mode',"TEXT DEFAULT ''"),('first_seen','REAL'),('last_seen','REAL'),('plate','TEXT')]:
             if name not in columns:
                 self.db.execute(f'ALTER TABLE events ADD COLUMN {name} {definition}')
         self.db.execute("CREATE TABLE IF NOT EXISTS recipient_deliveries (event_id TEXT,recipient TEXT,status TEXT DEFAULT 'pending',attempts INTEGER DEFAULT 0,next_try REAL DEFAULT 0,sent_at REAL,error TEXT DEFAULT '',created REAL,PRIMARY KEY(event_id,recipient))")
@@ -41,6 +41,12 @@ class Store:
         with self.lock:
             self.db.executemany('UPDATE events SET last_seen=? WHERE id=? AND last_seen<?',
                                 [(seen, key, seen) for key in event_ids])
+            self.db.commit()
+
+    def save_plate(self, event_id, plate):
+        with self.lock:
+            self.db.execute("UPDATE events SET plate=? WHERE id=? AND label='car' AND plate IS NULL",
+                            (plate, event_id))
             self.db.commit()
 
     def recent(self,limit=50):
