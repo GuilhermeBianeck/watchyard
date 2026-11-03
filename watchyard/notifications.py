@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 import requests
 
 from .policy import decision
+from .correlation import LABELS, preview
 
 
 @dataclass(frozen=True)
@@ -134,6 +135,7 @@ class Notifications:
         self.settings = settings
         self.bot = bot
         self.telegram = TelegramProvider(bot)
+        self.delivery_lock = threading.Lock()
 
     def providers(self):
         enabled = self.settings.secret('NOTIFICATION_PROVIDERS', ['telegram'])
@@ -174,7 +176,7 @@ class Notifications:
         if failures:
             raise RuntimeError(f'Test accepted by {sent} destination(s); failed: '+', '.join(sorted(failures)))
 
-    def attempt(self, store, key, targets, notice, image=None):
+    def attempt(self, store, key, targets, notice, image=None, *, activity_group=None):
         store.ensure_recipients(key, [{'id': target} for target in targets])
         for d in store.recipient_deliveries(key):
             if d['status'] != 'pending':
@@ -186,6 +188,10 @@ class Notifications:
             if d['next_try'] > time.time():
                 continue
             provider, address = target
+            if (activity_group and provider is self.telegram
+                    and store.activity_delivered(activity_group, key, d['recipient'])):
+                store.recipient_result(key, d['recipient'], 'grouped')
+                continue
             try:
                 provider.send(address, notice, image)
                 store.recipient_result(key, d['recipient'], 'sent')
@@ -197,7 +203,23 @@ class Notifications:
                 store.recipient_result(key, d['recipient'], 'pending', error, delay)
         return store.recipient_deliveries(key)
 
+    def group_for(self, store, event):
+        if event['label'] not in LABELS:
+            return None
+        if event['activity_group']:
+            return event['activity_group']
+        history = [row for row in store.correlation_events() if row['created'] <= event['created']]
+        for group in preview(history, limit=None, include_single=True):
+            for member in group['events']:
+                if member['id'] == event['id']:
+                    return store.assign_activity_group(event['id'], group['id'], member['reason'])
+        return None
+
     def deliver_once(self, store):
+        with self.delivery_lock:
+            self.deliver_pending(store)
+
+    def deliver_pending(self, store):
         for event in store.pending():
             key = event['id']
             age = time.time()-event['created']
@@ -220,8 +242,12 @@ class Notifications:
                 caption += f'\nDelayed delivery: {int(age)} seconds.'
             notice = Notice('event', key, event['created'], caption, mode=='silent', event)
             targets = self.targets()
+            group = self.group_for(store, event) if any(
+                provider is self.telegram for provider, _ in targets.values()
+            ) else None
             results = self.attempt(store, key, targets, notice,
-                                   lambda: (self.settings.path/'events'/event['snapshot']).read_bytes())
+                                   lambda: (self.settings.path/'events'/event['snapshot']).read_bytes(),
+                                   activity_group=group)
             waiting = [d for d in results if d['status']=='pending']
             telegram_waiting = [d for d in waiting if targets[d['recipient']][0] is self.telegram]
             self.bot.last_delivery_error = telegram_waiting[0]['error'] if telegram_waiting else None
@@ -230,8 +256,12 @@ class Notifications:
                 store.mark(key, 'pending', f'Delivered to {sent}/{len(results)} destinations; retrying: {waiting[0]["error"]}',
                            retry_in=max(1, min(d['next_try'] for d in waiting)-time.time()))
             else:
-                status = 'sent' if sent else 'recorded'
-                store.mark(key, status, f'Delivered to {sent}/{len(results)} destinations' if results else 'No alert destinations enabled')
+                grouped = sum(d['status']=='grouped' for d in results)
+                status = 'sent' if sent else 'grouped' if grouped else 'recorded'
+                detail = f'Delivered to {sent}/{len(results)} destinations' if results else 'No alert destinations enabled'
+                if grouped:
+                    detail += f'. Already alerted for this activity on {grouped} Telegram destination(s).'
+                store.mark(key, status, detail)
 
     def flush_health(self, store):
         targets = self.targets()

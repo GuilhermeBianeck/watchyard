@@ -44,3 +44,47 @@ def test_relationship_is_learned_from_prior_independent_examples():
              event('later-b', 31, 1614, colors=color)]
     assert not any(g['id'] == 'later-a' for g in preview(observations[:4] + later))
     assert preview(observations + later)[0]['events'][1]['reason'].startswith('Recurring')
+
+
+def test_group_delivers_once_per_telegram_account_and_allows_failed_first_send(tmp_path):
+    import time
+
+    from watchyard.config import Settings
+    from watchyard.service import Service
+
+    settings = Settings(tmp_path)
+    settings.save_secrets({'TELEGRAM_CHAT_ID': 123})
+    service = Service(settings)
+    members = service.telegram.members
+    invite = members.invite('telegram', 'Second account', 'viewer')
+    members.accept(invite['code'], 'telegram', '456', client='tg')
+    (tmp_path/'events'/'vehicle.jpg').write_bytes(b'image')
+    first = service.store.add({'id': 1, 'name': 'First view'}, 'car', .9, 'vehicle.jpg')
+    second = service.store.add({'id': 3, 'name': 'Second view'}, 'car', .9, 'vehicle.jpg')
+    now = time.time()
+    service.store.db.execute('UPDATE events SET created=? WHERE id=?', (now-8, first))
+    service.store.db.execute('UPDATE events SET created=? WHERE id=?', (now-5, second))
+    service.store.db.commit()
+    calls = []
+
+    def photo(*args, event_id, chat_id, **kwargs):
+        calls.append((event_id, str(chat_id)))
+        if event_id == first and str(chat_id) == '456':
+            raise RuntimeError('unavailable')
+
+    service.telegram.photo = photo
+    service.notifications.deliver_once(service.store)
+    assert sorted(calls) == sorted([(first, '123'), (first, '456'), (second, '456')])
+    assert service.store.event(first)['activity_group'] == service.store.event(second)['activity_group']
+    assert [r['status'] for r in service.store.recipient_deliveries(second)].count('grouped') == 1
+
+    service.store.db.execute('UPDATE events SET next_try=0 WHERE id=?', (first,))
+    service.store.db.execute('UPDATE recipient_deliveries SET next_try=0 WHERE event_id=?', (first,))
+    service.store.db.commit()
+    service.notifications.deliver_once(service.store)
+    assert len(calls) == 3
+
+    third = service.store.add({'id': 4, 'name': 'Third view'}, 'car', .9, 'vehicle.jpg')
+    service.notifications.deliver_once(service.store)
+    assert len(calls) == 3
+    assert service.store.event(third)['status'] == 'grouped'

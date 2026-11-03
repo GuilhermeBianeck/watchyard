@@ -3,7 +3,7 @@ const $ = id => document.getElementById(id);
 const icon = name => `<svg aria-hidden="true"><use href="#i-${name}"/></svg>`;
 const esc = s => String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const title = s => ({person:'Person',car:'Vehicle',dog:'Dog',cat:'Cat'}[s]||s);
-const delivery = s => ({sent:'Alert delivered',pending:'Waiting to send',muted:'Saved quietly',recorded:'Local history',unpaired:'Saved on server',partial:'Partly delivered',expired:'Saved on server'}[s]||s);
+const delivery = s => ({sent:'Alert delivered',grouped:'Added to existing alert',pending:'Waiting to send',muted:'Saved quietly',recorded:'Local history',unpaired:'Saved on server',partial:'Partly delivered',expired:'Saved on server'}[s]||s);
 let diagnostics=null,policyCamera=null,activeEvent=null,admin=true,deviceInfo=null,deviceSignature='';
 let linkedEvent=location.hash.startsWith('#event=')?location.hash.slice(7):null;
 let state=null,events=[],signedIn=false,localDevice=false,currentView='home',filter='all',activeCamera=null,editing=null,points=[],zoneImage=new Image(),tick=0,toastTimer,busy=false,eventSignature='', cameraFilter='';

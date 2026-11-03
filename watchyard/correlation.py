@@ -1,4 +1,4 @@
-"""Advisory activity groups. This module never controls notification delivery."""
+"""Activity grouping shared by the dashboard and Telegram delivery."""
 from collections import defaultdict
 import json
 import math
@@ -91,12 +91,38 @@ def _matches(a, b, patterns):
     return None
 
 
-def preview(rows):
+def _learn(patterns, previous, event):
+    if previous['camera'] == event['camera']:
+        return
+    delta = event['start'] - previous['start']
+    if not 0 <= delta <= CROSS_CAMERA_WINDOW:
+        return
+    plate = _plate(previous, event)
+    if plate < 0 or (plate != 1 and (delta > 12 or _appearance(previous, event) < .82)):
+        return
+    observations = patterns[_link(previous, event)]
+    if not observations or event['start'] - observations[-1][0] >= DOORWAY_GAP:
+        observations.append((event['start'], delta))
+
+
+def preview(rows, *, limit=12, include_single=False):
     events = sorted((_prepare(row) for row in rows if row['label'] in LABELS
                      and row.get('feedback') != 'false_alarm'), key=lambda e: (e['start'], e['id']))
     patterns = defaultdict(list)
     groups = []
+    group_keys = {}
     for event in events:
+        assigned = event.get('activity_group') or (event['id'] if event['id'] in group_keys else None)
+        if assigned:
+            group = group_keys.get(assigned)
+            if group is None:
+                group = []
+                groups.append(group)
+                group_keys[assigned] = group
+            for previous, _ in reversed(group):
+                _learn(patterns, previous, event)
+            group.append((event, event.get('activity_reason') or ''))
+            continue
         candidates = []
         for group in reversed(groups):
             if event['start'] - group[0][0]['start'] > MAX_GROUP_AGE:
@@ -104,7 +130,7 @@ def preview(rows):
             if any(_plate(previous, event) < 0 for previous, _ in group):
                 continue
             if any(previous['camera'] == event['camera'] and previous['label'] == event['label']
-                   and event['label'] == 'person' and previous['start'] <= event['start'] <= previous['last']
+                   and previous['start'] <= event['start'] <= previous['last']
                    for previous, _ in group):
                 continue
             matches = [(match, previous) for previous, _ in group
@@ -114,19 +140,16 @@ def preview(rows):
                 candidates.append((match, previous, group))
         candidates.sort(key=lambda item: item[0][0], reverse=True)
         if not candidates or (len(candidates) > 1 and candidates[0][0][0] == candidates[1][0][0]):
-            groups.append([(event, '')])
+            group = [(event, '')]
+            groups.append(group)
+            group_keys[event['id']] = group
             continue
-        (strength, reason), previous, group = candidates[0]
+        (_, reason), previous, group = candidates[0]
+        _learn(patterns, previous, event)
         group.append((event, reason))
-        if previous['camera'] != event['camera'] and (
-            strength == 4 or strength >= 2 and _appearance(previous, event) >= .82
-        ):
-            observations = patterns[_link(previous, event)]
-            if not observations or event['start'] - observations[-1][0] >= DOORWAY_GAP:
-                observations.append((event['start'], event['start'] - previous['start']))
     return [
-        {'id': group[0][0]['id'], 'label': group[0][0]['label'],
+        {'id': key, 'label': group[0][0]['label'],
          'events': [{'id': event['id'], 'camera_name': event['camera_name'],
                      'created': event['created'], 'reason': reason} for event, reason in group]}
-        for group in reversed(groups) if len(group) > 1
-    ][:12]
+        for key, group in reversed(group_keys.items()) if include_single or len(group) > 1
+    ][:limit]

@@ -18,7 +18,7 @@ class Store:
             label TEXT, confidence REAL, snapshot TEXT, status TEXT,
             attempts INTEGER DEFAULT 0, next_try REAL DEFAULT 0, detail TEXT DEFAULT '')""")
         columns={r[1] for r in self.db.execute('PRAGMA table_info(events)')}
-        for name,definition in [('feedback',"TEXT DEFAULT 'unreviewed'"),('sent_at','REAL'),('notify_mode',"TEXT DEFAULT ''"),('first_seen','REAL'),('last_seen','REAL'),('plate','TEXT'),('correlation_hint','TEXT')]:
+        for name,definition in [('feedback',"TEXT DEFAULT 'unreviewed'"),('sent_at','REAL'),('notify_mode',"TEXT DEFAULT ''"),('first_seen','REAL'),('last_seen','REAL'),('plate','TEXT'),('correlation_hint','TEXT'),('activity_group','TEXT'),('activity_reason','TEXT')]:
             if name not in columns:
                 self.db.execute(f'ALTER TABLE events ADD COLUMN {name} {definition}')
         self.db.execute("CREATE TABLE IF NOT EXISTS recipient_deliveries (event_id TEXT,recipient TEXT,status TEXT DEFAULT 'pending',attempts INTEGER DEFAULT 0,next_try REAL DEFAULT 0,sent_at REAL,error TEXT DEFAULT '',created REAL,PRIMARY KEY(event_id,recipient))")
@@ -52,9 +52,26 @@ class Store:
     def correlation_events(self):
         with self.lock:
             return [dict(row) for row in self.db.execute(
-                "SELECT id,created,camera,camera_name,label,first_seen,last_seen,feedback,plate,correlation_hint "
+                "SELECT id,created,camera,camera_name,label,first_seen,last_seen,feedback,plate,correlation_hint,activity_group,activity_reason "
                 "FROM events WHERE created>=? AND label IN ('person','car') ORDER BY created DESC LIMIT 240",
                 (time.time()-7*86400,))]
+
+    def assign_activity_group(self, event_id, group_id, reason):
+        with self.lock:
+            self.db.execute(
+                'UPDATE events SET activity_group=?,activity_reason=? WHERE id=? AND activity_group IS NULL',
+                (group_id, reason, event_id))
+            self.db.commit()
+            row = self.db.execute('SELECT activity_group FROM events WHERE id=?', (event_id,)).fetchone()
+            return row[0] if row else None
+
+    def activity_delivered(self, group_id, event_id, recipient):
+        with self.lock:
+            return self.db.execute(
+                "SELECT 1 FROM events e JOIN recipient_deliveries d ON d.event_id=e.id "
+                "WHERE (e.activity_group=? OR e.id=?) AND e.id!=? AND e.feedback!='false_alarm' AND d.recipient=? AND d.status='sent' LIMIT 1",
+                (group_id, group_id, event_id, recipient),
+            ).fetchone() is not None
 
     def recent(self,limit=50):
         with self.lock:
