@@ -226,8 +226,7 @@ def create_app(service=None, run_service=True):
 
     @app.get('/healthz')
     def health():
-        status = service.status()
-        ready = status['detector'] not in ('loading','unavailable') and not status['detector_error'] and all(c['online'] and time.time()-c['detected_at']<12 for c in status['cameras'] if c['enabled'])
+        ready = service.ready()
         return Response('ready' if ready else 'starting or degraded',status_code=200 if ready else 503)
 
     def public_event(event, owner):

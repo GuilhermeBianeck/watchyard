@@ -18,7 +18,14 @@ def check_service(session):
         if health_only:
             return response.text.strip()=='ready'
         status=response.json()
-        return (status['detector'] not in ('loading','unavailable') and not status['detector_error'] and all(time.time()-c['detected_at']<45 for c in status['cameras'] if c['enabled'] and c['online']))
+        if status['detector'] in ('loading', 'unavailable') or status['detector_error']:
+            return False
+        online = [camera for camera in status['cameras'] if camera['enabled'] and camera['online']]
+        # The service reports individual camera failures separately.
+        return not online or any(
+            not camera.get('analysis_error') and time.time() - camera['detected_at'] < 45
+            for camera in online
+        )
     except (requests.RequestException,ValueError,KeyError):
         return False
 

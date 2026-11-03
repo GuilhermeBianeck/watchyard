@@ -61,3 +61,22 @@ Before this deployment, event history and settings were backed up locally in
 Application Support/Watchyard/backups. Service start/stop/restart controls all
 three LaunchAgents. Restart after changing credentials. The Telegram command
 cursor persists across restarts to reduce replayed commands.
+
+## Field report
+
+Run `.venv/bin/python -m scripts.field_report --hours 24` from the repository.
+It reads the local database and prints aggregate camera counts, Telegram
+acceptances, suppressed repeats, acceptance latency and resource samples.
+**Settings → Reliability** also shows suppressed Telegram deliveries for the
+past 24 hours. Counts are per destination. A repeat suppressed for two
+Telegram accounts counts twice.
+
+For a field check, note the time and intended outcome of a walk or arrival.
+Compare the recorder footage, event group and Telegram messages. Include
+two separate visitors or vehicles arriving close together as a negative test.
+Use this ground truth to count misses and wrong merges. Delivery and review
+counts by themselves cannot measure accuracy.
+
+Analysis errors are shown per camera. A failed frame backs off that camera's
+analysis while other cameras continue. The home watchdog checks overall
+service health. The service tracks individual camera failures separately.

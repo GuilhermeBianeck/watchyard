@@ -92,42 +92,59 @@ class Service:
                 frame, captured, sequence = camera.latest()
                 if frame is None or time.time()-captured > 6 or sequence == camera.detected_sequence:
                     continue
-                start = time.perf_counter()
                 scheduled = time.monotonic()
                 try:
-                    result = self.model.predict(frame, conf=config['confidence'], classes=[0,2,15,16], imgsz=640, verbose=False, **self.runtime.prediction_options())[0]
-                    h,w = frame.shape[:2]
-                    detections = []
-                    for box in result.boxes:
-                        label = result.names[int(box.cls[0])]
-                        if label not in c['labels']:
-                            continue
-                        coords = box.xyxy[0].cpu().tolist()
-                        bounds = [max(0, min(1, v / (w if i % 2 == 0 else h)))
-                                  for i, v in enumerate(coords)]
-                        if not ignored_box(label, bounds, c):
-                            detections.append({'label': label, 'confidence': float(box.conf[0]), 'box': bounds})
-                    camera.publish_detections(detections, sequence)
-                    camera.analysed_frames += 1
-                    camera.inference_ms = round((time.perf_counter()-start)*1000,1)
-                    window=max(3,config['confirmation_frames']/config['inference_fps']+.5)
-                    tracker = self.trackers[c['id']]
-                    observed = time.monotonic()
-                    events = tracker.update(detections,observed,c['zone'],config['confirmation_frames'],window=window)
-                    self.store.extend_observations(
-                        [track.event_id for track in tracker.tracks.values()
-                         if track.event_id and track.last == observed], captured)
-                    for event in events:
-                        track = tracker.tracks[event['track_id']]
-                        first_seen = captured - (observed - track.first)
-                        track.event_id = self.record(c,frame,event,config,first_seen=first_seen,last_seen=captured)
-                    self.detector_error = None
+                    self.analyse_frame(camera, c, frame, captured, sequence, config)
+                    camera.analysis_error = None
                 except Exception as exc:
-                    self.detector_error = type(exc).__name__
-                    log.error('Inference failed: %s',self.detector_error)
-                    self.stop.wait(2)
-                next_due[c['id']] = scheduled+1/max(0.5,config['inference_fps'])
+                    camera.analysis_error = type(exc).__name__
+                    log.error('Analysis failed on camera %s: %s', camera.id, camera.analysis_error)
+                    # Back off only this camera. Other views keep their normal schedule.
+                    next_due[camera.id] = time.monotonic() + 2
+                    continue
+                next_due[camera.id] = scheduled + 1 / max(0.5, config['inference_fps'])
             self.stop.wait(0.02)
+
+    def analyse_frame(self, camera, camera_config, frame, captured, sequence, config):
+        start = time.perf_counter()
+        result = self.model.predict(frame, conf=config['confidence'], classes=[0,2,15,16], imgsz=640, verbose=False, **self.runtime.prediction_options())[0]
+        h,w = frame.shape[:2]
+        detections = []
+        for box in result.boxes:
+            label = result.names[int(box.cls[0])]
+            if label not in camera_config['labels']:
+                continue
+            coords = box.xyxy[0].cpu().tolist()
+            bounds = [max(0, min(1, v / (w if i % 2 == 0 else h)))
+                      for i, v in enumerate(coords)]
+            if not ignored_box(label, bounds, camera_config):
+                detections.append({'label': label, 'confidence': float(box.conf[0]), 'box': bounds})
+        camera.publish_detections(detections, sequence)
+        camera.analysed_frames += 1
+        camera.inference_ms = round((time.perf_counter()-start)*1000,1)
+        window=max(3,config['confirmation_frames']/config['inference_fps']+.5)
+        tracker = self.trackers[camera_config['id']]
+        observed = time.monotonic()
+        events = tracker.update(detections,observed,camera_config['zone'],config['confirmation_frames'],window=window)
+        self.store.extend_observations(
+            [track.event_id for track in tracker.tracks.values()
+             if track.event_id and track.last == observed], captured)
+        for event in events:
+            track = tracker.tracks[event['track_id']]
+            first_seen = captured - (observed - track.first)
+            track.event_id = self.record(camera_config,frame,event,config,first_seen=first_seen,last_seen=captured)
+
+    def ready(self):
+        if self.detector in ('loading', 'unavailable') or self.detector_error:
+            return False
+        now = time.time()
+        for config in self.settings.snapshot()['cameras']:
+            if not config['enabled']:
+                continue
+            camera = self.cameras[config['id']]
+            if camera.analysis_error or now - camera.captured_at >= 12 or now - camera.detected_at >= 12:
+                return False
+        return True
 
     def record(self, camera, frame, event, config, *, first_seen=None, last_seen=None):
         image = frame.copy()
@@ -166,7 +183,7 @@ class Service:
         cameras = []
         for c in config['cameras']:
             camera = self.cameras[c['id']]
-            cameras.append({**c,'online':now-camera.captured_at<12,'captured_at':camera.captured_at,'detected_at':camera.detected_at,'inference_ms':camera.inference_ms,'analysed_frames':camera.analysed_frames,'decoder':camera.mode,'reconnects':camera.reconnects,'error':camera.last_error,'detections':camera.display_detections(c)})
+            cameras.append({**c,'online':now-camera.captured_at<12,'captured_at':camera.captured_at,'detected_at':camera.detected_at,'inference_ms':camera.inference_ms,'analysis_error':camera.analysis_error,'analysed_frames':camera.analysed_frames,'decoder':camera.mode,'reconnects':camera.reconnects,'error':camera.last_error,'detections':camera.display_detections(c)})
         process = psutil.Process()
         children = process.children(recursive=True)
         ram = process.memory_info().rss
@@ -181,6 +198,9 @@ class Service:
         message = f"Watchyard\nCameras: {online}/{len(status['cameras'])} online\nDetector: {status['detector']}\nAlerts: {'muted' if status['settings']['muted_until']>time.time() or not status['settings']['enabled'] else 'enabled'}\nMemory (service + video processes): {status['memory_mb']} MB"
         if status['detector_error']:
             message += '\nDetection problem: '+status['detector_error']
+        cameras_with_errors = [c['name'] for c in status['cameras'] if c['enabled'] and c['analysis_error']]
+        if cameras_with_errors:
+            message += '\nAnalysis needs attention: ' + ', '.join(cameras_with_errors)
         return message
 
     def monitor(self):
@@ -198,7 +218,11 @@ class Service:
             if now-self.started < 60:
                 continue
             for camera_id,camera in self.cameras.items():
-                self.store.observe_health('camera-'+str(camera_id),self.camera_config(camera_id)['name'],now-camera.captured_at<30)
+                config = self.camera_config(camera_id)
+                healthy = now - camera.captured_at < 30
+                if config['enabled'] and self.model is not None:
+                    healthy = healthy and not camera.analysis_error and now - camera.detected_at < 45
+                self.store.observe_health('camera-'+str(camera_id), config['name'], healthy)
 
     def close(self):
         self.stop.set()

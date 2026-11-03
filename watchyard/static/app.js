@@ -74,6 +74,7 @@ for (const id of ['events', 'latest-events']) $(id).addEventListener('click', ha
 function cameraDetail(camera) {
   if (!camera.online) return 'Camera offline';
   if (!camera.enabled) return 'Detection paused';
+  if (camera.analysis_error) return 'Detection needs attention';
   if (camera.detections.length) {
     return [...new Set(camera.detections.map(d => title(d.label)))].join(', ') + ' in view';
   }
@@ -164,7 +165,7 @@ async function refresh(){if(!signedIn||busy)return;busy=true;try{[state,events,d
 const count=state.cameras.length;
 const analysing=state.cameras.filter(c=>c.enabled&&c.online);
 const starting=state.detector==='loading'&&!state.detector_error;
-const healthy=!state.detector_error&&!['loading','unavailable'].includes(state.detector)&&analysing.every(c=>Date.now()/1000-c.detected_at<12);
+const healthy=!state.detector_error&&!['loading','unavailable'].includes(state.detector)&&analysing.every(c=>!c.analysis_error&&Date.now()/1000-c.detected_at<12);
 const connection=$('connection-label');
 connection.innerHTML=`<span class="dot ${online===count?'online':'offline'}"></span>${online===count?'Connected':'Camera offline'}`;
 $('home-status').textContent=`${online} of ${count} cameras online`+(starting?' · Starting detection':healthy?'':' · Detection needs attention');
@@ -187,6 +188,7 @@ enter().catch(()=>{$('login-error').textContent='Cannot connect to Watchyard. Ch
 function renderReliability(){
  if(!diagnostics)return;
  $('queue-count').textContent=String(diagnostics.delivery.pending||0);
+ $('telegram-suppressed').textContent=String(diagnostics.telegram_suppressed_24h||0);
  $('delivery-delay').textContent=diagnostics.mean_delivery_seconds===null?'Collecting':diagnostics.mean_delivery_seconds+'s · '+diagnostics.delivery_sample_count+' sent';
  if(document.activeElement!==$('analysis-rate'))$('analysis-rate').value=String(state.settings.inference_fps);
  const w=diagnostics.watchdog;

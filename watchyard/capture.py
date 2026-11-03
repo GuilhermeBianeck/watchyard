@@ -27,6 +27,7 @@ class Camera:
         self.overlays = Overlays()
         self.detected_at = 0
         self.inference_ms = 0
+        self.analysis_error = None
         self.detected_sequence = -1
         self.analysed_frames = 0
         self.last_error = None

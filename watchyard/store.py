@@ -109,8 +109,12 @@ class Store:
             feedback=dict(self.db.execute('SELECT feedback,count(*) FROM events GROUP BY feedback').fetchall())
             times=[r[0] for r in self.db.execute('SELECT sent_at-created FROM events WHERE sent_at IS NOT NULL ORDER BY sent_at DESC LIMIT 1000')]
             sample=self.db.execute('SELECT count(*),max(memory_mb),avg(inference_ms) FROM samples WHERE created>?',(time.time()-86400,)).fetchone()
+            suppressed = self.db.execute(
+                "SELECT count(*) FROM recipient_deliveries WHERE status='grouped' AND created>=?",
+                (time.time()-86400,),
+            ).fetchone()[0]
             health=[dict(r) for r in self.db.execute('SELECT * FROM health_outbox ORDER BY created DESC LIMIT 15')]
-        return {'delivery':counts,'reviews':feedback,'mean_delivery_seconds':round(sum(times)/len(times),1) if times else None,'delivery_sample_count':len(times),'samples_24h':sample[0],'peak_memory_mb':sample[1],'mean_inference_ms':round(sample[2],1) if sample[2] else None,'health_events':health}
+        return {'delivery':counts,'telegram_suppressed_24h':suppressed,'reviews':feedback,'mean_delivery_seconds':round(sum(times)/len(times),1) if times else None,'delivery_sample_count':len(times),'samples_24h':sample[0],'peak_memory_mb':sample[1],'mean_inference_ms':round(sample[2],1) if sample[2] else None,'health_events':health}
 
     def observe_health(self,key,name,healthy,now=None,debounce=45):
         now=time.time() if now is None else now
