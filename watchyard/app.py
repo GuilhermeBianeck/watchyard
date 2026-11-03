@@ -17,6 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from . import __version__
 from .config import Settings
 from .service import Service
 from .access import Access, lan_address, lan_network
@@ -119,7 +120,7 @@ def create_app(service=None, run_service=True):
         if run_service:
             service.close()
 
-    app = FastAPI(title='Watchyard',version='0.6.0',lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
+    app = FastAPI(title='Watchyard',version=__version__,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
     app.state.service = service
     app.add_middleware(TrustedHostMiddleware,allowed_hosts=list(runtime.allowed_hosts) if runtime.allowed_hosts else ['localhost','127.0.0.1','testserver',address,hostname,hostname.split('.')[0]+'.local',bonjour])
 
@@ -192,6 +193,8 @@ def create_app(service=None, run_service=True):
 
     @app.post('/api/invitations')
     def invite(data:Invitation,request:Request):
+        if data.kind == 'telegram' and not service.telegram.username:
+            raise HTTPException(409,'Connect the Telegram bot before creating Telegram invitations')
         try:
             result=access.members.invite(data.kind,data.name.strip(),data.role)
         except ValueError as exc:
@@ -211,6 +214,10 @@ def create_app(service=None, run_service=True):
     def revoke_device(device_id:str):
         if not access.members.revoke(device_id):raise HTTPException(404)
         return {'ok':True}
+
+    @app.get('/api/overlays')
+    def overlays():
+        return service.overlays()
 
     @app.get('/api/status')
     def status():
@@ -365,10 +372,11 @@ def create_app(service=None, run_service=True):
 
     @app.post('/api/test-notification')
     def test_notification():
-        if not service.telegram.paired():
-            raise HTTPException(409,'Pair the Telegram bot first')
+        targets = service.notifications.targets()
+        if not targets:
+            raise HTTPException(409,'Configure an alert destination first')
         try:
-            service.telegram.text('Watchyard test notification. Telegram delivery is working. Walk through a camera view to test object detection.')
+            service.notifications.send_test(targets)
         except RuntimeError as exc:
             raise HTTPException(503,str(exc)) from None
         return {'ok':True}

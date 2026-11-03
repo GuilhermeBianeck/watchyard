@@ -8,7 +8,7 @@ from watchyard.config import Settings
 from watchyard.policy import decision,scheduled
 from watchyard.service import Service
 from watchyard.store import Store
-from watchyard.watchdog import flush_health
+from watchyard.notifications import Notifications
 
 
 def stamp(value):
@@ -79,7 +79,7 @@ def test_health_delivery_failure_keeps_queue(tmp_path):
         def paired(self):return True
         def recipient_devices(self):return [{'id':'test','external_id':'1'}]
         def text(self,*a,**kw):raise RuntimeError('offline')
-    flush_health(s,Bot())
+    Notifications(Settings(tmp_path),Bot()).flush_health(s)
     assert s.diagnostics()['health_events'][0]['status']=='pending'
     assert s.diagnostics()['health_events'][0]['attempts']==1
 

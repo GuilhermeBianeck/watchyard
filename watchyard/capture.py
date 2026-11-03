@@ -2,11 +2,12 @@ import shutil
 import subprocess
 import threading
 import time
-from urllib.parse import quote
 
 import cv2
 import numpy as np
 from .runtime import Runtime
+from .sources import CameraSources
+from .overlays import Overlays
 
 
 class Camera:
@@ -21,7 +22,7 @@ class Camera:
         self.process = None
         self.mode = "starting"
         self.reconnects = 0
-        self.detections = []
+        self.overlays = Overlays()
         self.detected_at = 0
         self.inference_ms = 0
         self.detected_sequence = -1
@@ -37,10 +38,7 @@ class Camera:
 
     def run(self):
         s = self.settings
-        host = s.secret('NVR_HOST', '127.0.0.1')
-        user = quote(s.secret('NVR_USERNAME', 'admin'), safe='')
-        password = quote(s.secret('NVR_PASSWORD', ''), safe='')
-        url = f"rtsp://{user}:{password}@{host}:554/Streaming/Channels/{self.id}02"
+        url = CameraSources(s).stream(self.id)
         hardware = Runtime.read().decoder == 'videotoolbox'
         while not self.stop.is_set():
             sampling = max(1, min(2, s.snapshot()['inference_fps']))
@@ -51,16 +49,7 @@ class Camera:
             args += ['-i', url, '-an', '-sn', '-vf', f'fps={sampling:g},scale={self.WIDTH}:{self.HEIGHT}', '-pix_fmt', 'bgr24', '-f', 'rawvideo', 'pipe:1']
             got_frame = False
             try:
-                self.process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=self.WIDTH*self.HEIGHT*3)
-                def consume_errors(proc):
-                    for raw in proc.stderr:
-                        line = raw.decode(errors='replace').strip()
-                        line = line.replace(url, '[NVR stream]')
-                        password_value = s.secret('NVR_PASSWORD', '')
-                        if password_value:
-                            line = line.replace(password_value,'[redacted]').replace(quote(password_value,safe=''),'[redacted]')
-                        self.last_error = line[-400:]
-                threading.Thread(target=consume_errors,args=(self.process,),daemon=True).start()
+                self.process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=self.WIDTH*self.HEIGHT*3)
                 self.mode = 'VideoToolbox' if hardware else 'software'
                 size = self.WIDTH*self.HEIGHT*3
                 while not self.stop.is_set():
@@ -90,6 +79,7 @@ class Camera:
                 continue
             if not got_frame and hardware:
                 hardware = False
+            self.last_error = "Camera stream disconnected; reconnecting"
             self.reconnects += 1
             self.stop.wait(4)
 
@@ -105,13 +95,26 @@ class Camera:
             except OSError:
                 pass
 
+    def publish_detections(self, detections, sequence):
+        with self.lock:
+            self.overlays.update(detections, time.monotonic())
+            self.detected_at = time.time()
+            self.detected_sequence = sequence
+
+    def display_detections(self, config):
+        with self.lock:
+            if not config['enabled'] or time.time()-self.captured_at >= 6:
+                return []
+            return self.overlays.visible(time.monotonic(), config['labels'])
+
     def jpeg(self, annotated=True):
         frame, stamp, _ = self.latest()
         if frame is None or time.time()-stamp > 12:
             return None
         frame = frame.copy()
-        if annotated and time.time()-self.detected_at < 3:
-            for d in self.detections:
+        if annotated:
+            config = CameraSources(self.settings).camera(self.id)
+            for d in self.display_detections(config):
                 draw_detection(frame, d)
         ok, encoded = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
         return encoded.tobytes() if ok else None

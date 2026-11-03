@@ -13,7 +13,7 @@ Reduce irrelevant motion notifications from four locally connected NVR cameras w
 6. Approve multiple private Telegram accounts using one-use, 15-minute invitations; accept commands only from approved private accounts with matching chat/user identity.
 7. Deliver one photo and caption for each eligible event to each subscribed account. Send animal events silently. Retry transient failures per recipient with bounded retention and mark stale events as expired or partly delivered.
 8. Provide `/status`, `/snapshot`, `/events`, `/notifications`, `/mute`, `/unmute` and `/help`; detection continues during mute. Global controls require management access; each account can pause its own alerts.
-9. Provide a local dashboard with four live snapshots, health, event history, rules, mute and test notification.
+9. Provide a local dashboard with live video and stable detection overlays for configured cameras, health, event history, rules, mute and test notification.
 10. Report camera disconnection and recovery when the Telegram connection is available.
 11. Start at user login, recover from process failure, and expose a truthful health endpoint.
 12. Keep credentials and images outside Git; serve the dashboard on the home network with device sign-in; keep Python on loopback and reject foreign Host, Origin and subnet access.

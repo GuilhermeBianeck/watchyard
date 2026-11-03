@@ -2,7 +2,44 @@
 (() => {
  const sessions=new Map(), visible=new Set(), retries=new Map();
  const expanded=$('expanded-live');
- let observer;
+ let observer, overlayBusy=false;
+ const layers=new WeakMap();
+ const svgNS='http://www.w3.org/2000/svg';
+ function svg(tag,attrs){
+  const node=document.createElementNS(svgNS,tag);
+  for(const [key,value] of Object.entries(attrs))node.setAttribute(key,value);
+  return node;
+ }
+ function draw(video,detections){
+  let layer=layers.get(video);
+  if(!layer){
+   layer=svg('svg',{class:'detection-overlay','aria-hidden':'true'});
+   video.after(layer);layers.set(video,layer);
+  }
+  const w=video.videoWidth,h=video.videoHeight;
+  if(!w||!h||!current(video)?.playing){layer.replaceChildren();return;}
+  layer.setAttribute('viewBox',`0 0 ${w} ${h}`);
+  layer.replaceChildren(...detections.map(d=>{
+   const [a,b,c,e]=d.box;
+   const group=svg('g',{}), x=a*w, y=b*h;
+   const box=svg('rect',{x,y,width:(c-a)*w,height:(e-b)*h,rx:3});
+   const label=svg('text',{x:Math.min(x+3,w-h*.22),y:Math.max(h*.045,y-5),'font-size':h*.044});
+   label.textContent=`${d.label} ${Math.round(d.confidence*100)}%`;
+   group.append(box,label);
+   return group;
+  }));
+ }
+ async function refreshOverlays(){
+  if(overlayBusy||document.hidden||!sessions.size||!signedIn)return;
+  overlayBusy=true;
+  const requested=[...sessions];
+  try{
+   const result=await api('/api/overlays',undefined,{signal:AbortSignal.timeout(3500)});
+   for(const [video,s] of requested)if(current(video)===s)draw(video,result[s.camera]||[]);
+  }catch{
+   for(const [video,s] of requested)if(current(video)===s)draw(video,[]);
+  }finally{overlayBusy=false;}
+ }
  const current=video=>sessions.get(video);
  function label(video,text){
   const s=current(video);if(s)s.label=text;
@@ -11,7 +48,7 @@
  }
  function stop(video){
   const s=current(video);if(!s)return;
-  sessions.delete(video);
+  sessions.delete(video);layers.get(video)?.replaceChildren();
   video.onplaying=video.oncanplay=video.onerror=video.onwaiting=video.ontimeupdate=video.onpause=null;
   if(s.hls)s.hls.destroy();
   video.pause();video.removeAttribute('src');video.load();video.classList.remove('live-visible');
@@ -43,12 +80,12 @@
   if(current(video)||Date.now()<(retries.get(video)||0))return;
   const s={hls:null,playing:false,progress:Date.now()};sessions.set(video,s);
   video.muted=true;video.autoplay=true;video.playsInline=true;
-  video.poster=`/api/cameras/${camera}/snapshot`;
+  video.removeAttribute('poster');
   label(video,'Connecting');
   video.oncanplay=()=>{if(current(video)===s){video.classList.add('live-visible');if(!s.attempted){s.attempted=true;video.play().catch(()=>manual(video,s));}}};
   video.onplaying=()=>{if(current(video)===s){s.playing=true;s.sample=null;delete video.dataset.measuredFps;s.progress=Date.now();video.classList.add('live-visible');label(video,'Live');}};
   video.ontimeupdate=()=>{s.progress=Date.now();};
-  video.onpause=()=>{if(current(video)===s){s.playing=false;label(video,'Paused');}};
+  video.onpause=()=>{if(current(video)===s){s.playing=false;draw(video,[]);label(video,'Paused');}};
   video.onwaiting=()=>{if(current(video)===s)label(video,'Buffering');};
   video.onerror=()=>fail(video,s);
   const url=`/api/cameras/${camera}/live/index.m3u8`;
@@ -118,4 +155,5 @@
   return Boolean(video&&current(video)?.playing&&!video.paused);
  },expandedPlaying(){return Boolean(current(expanded)?.playing&&!expanded.paused);}};
  setInterval(sync,2000);
+ setInterval(refreshOverlays,750);
 })();

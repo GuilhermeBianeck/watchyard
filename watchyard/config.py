@@ -5,6 +5,7 @@ import threading
 from pathlib import Path
 
 from .runtime import data_directory
+from .sources import validate_inventory, validate_urls
 
 DATA = data_directory()
 DEFAULTS = {
@@ -15,10 +16,10 @@ DEFAULTS = {
     "confidence": 0.55,
     "confirmation_frames": 3,
     "cameras": [
-        {"id": 1, "name": "Portão", "enabled": True, "zone": [], "labels": ["person", "car", "dog", "cat"]},
-        {"id": 2, "name": "Entrada", "enabled": True, "zone": [], "labels": ["person", "car", "dog", "cat"]},
-        {"id": 3, "name": "Quartinho", "enabled": True, "zone": [], "labels": ["person", "car", "dog", "cat"]},
-        {"id": 4, "name": "Fundos", "enabled": True, "zone": [], "labels": ["person", "car", "dog", "cat"]},
+        {"id": 1, "name": "Camera 1", "enabled": True, "zone": [], "labels": ["person", "car", "dog", "cat"]},
+        {"id": 2, "name": "Camera 2", "enabled": True, "zone": [], "labels": ["person", "car", "dog", "cat"]},
+        {"id": 3, "name": "Camera 3", "enabled": True, "zone": [], "labels": ["person", "car", "dog", "cat"]},
+        {"id": 4, "name": "Camera 4", "enabled": True, "zone": [], "labels": ["person", "car", "dog", "cat"]},
     ],
 }
 
@@ -34,12 +35,15 @@ class Settings:
         f = self.path / "settings.json"
         if f.exists():
             self.value.update(json.loads(f.read_text()))
+        validate_inventory(self.value["cameras"])
         from .policy import MODES,DEFAULT_SCHEDULE
         for camera in self.value['cameras']:
             camera.setdefault('alert_modes',copy.deepcopy(MODES))
             camera.setdefault('schedule',copy.deepcopy(DEFAULT_SCHEDULE))
         sf = self.path / "secrets.json"
         self.secrets = json.loads(sf.read_text()) if sf.exists() else {}
+
+        validate_urls(self.secrets.get("CAMERA_RTSP_URLS", {}))
 
     def snapshot(self):
         with self.lock:

@@ -4,7 +4,6 @@ import threading
 import time
 
 import requests
-from .policy import decision
 from .members import Members
 
 
@@ -17,7 +16,7 @@ class Telegram:
         self.last_poll_error = None
         self.last_send_at = 0
         self.last_success = 0
-        self.username = "HouseCCTVAlertBot"
+        self.username = None
 
     @property
     def last_error(self):
@@ -124,15 +123,17 @@ class Telegram:
         if cmd in ('/mute','/unmute','/review') and member['role']!='admin':
             reply('This account has view-only access. Use /notifications off to pause only your alerts.');return
         if cmd in ('/start','/help'):
-            reply('Watchyard commands\n/status — cameras and detector health\n/snapshot [1–4] — current picture (all four if omitted)\n/events — five recent events\n/notifications on|off — your alerts\n/mute [minutes] — silence alerts (default 60)\n/unmute — resume alerts\n\nSnapshots are sent only to this verified private chat. Detection continues while muted.')
+            reply('Watchyard commands\n/status — cameras and detector health\n/snapshot [camera ID] — current picture (all cameras if omitted)\n/events — five recent events\n/notifications on|off — your alerts\n/mute [minutes] — silence alerts (default 60)\n/unmute — resume alerts\n\nSnapshots are sent only to this verified private chat. Detection continues while muted.')
         elif cmd == '/status':
             reply(self.service.status_text())
         elif cmd == '/snapshot':
-            ids = [int(parts[1])] if len(parts)>1 and parts[1].isdigit() else [1,2,3,4]
+            if len(parts)>1 and (not parts[1].isascii() or not parts[1].isdigit() or len(parts[1])>18):
+                reply('Use /snapshot or /snapshot followed by a camera ID.'); return
+            ids = [int(parts[1])] if len(parts)>1 else self.service.cameras
             for camera_id in ids:
                 camera = self.service.cameras.get(camera_id)
                 if camera is None:
-                    reply('Camera must be 1–4.'); continue
+                    reply('Available camera IDs: '+', '.join(map(str,self.service.cameras))+'.'); continue
                 image = camera.jpeg()
                 name = self.service.camera_config(camera_id)['name']
                 if image:
@@ -162,6 +163,8 @@ class Telegram:
     def poll(self):
         while not self.service.stop.is_set():
             try:
+                if not self.username:
+                    self.username = self.call('getMe')['username']
                 updates = self.call('getUpdates', {'offset':self.offset,'timeout':15,'allowed_updates':'["message","callback_query"]'}, timeout=22)
                 self.last_poll_error = None
                 for update in updates:
@@ -174,56 +177,8 @@ class Telegram:
                 self.service.stop.wait(5)
 
     def deliver_once(self):
-        if not self.paired():return
-        for event in self.service.store.pending():
-            store=self.service.store
-            if time.time()-event['created']>180:
-                sent=sum(d['status']=='sent' for d in store.recipient_deliveries(event['id']))
-                store.mark(event['id'],'partial' if sent else 'expired','Some recipients missed the alert' if sent else 'Notification older than three minutes; retained locally')
-                continue
-            config=self.settings.snapshot()
-            camera=next(c for c in config['cameras'] if c['id']==event['camera'])
-            mode,reason=decision(config,camera,event['label'],event['created'])
-            if not config['enabled'] or config['muted_until']>time.time():mode,reason='off','Notifications muted before delivery'
-            if mode=='off':store.mark(event['id'],'recorded',reason);continue
-            recipients={r['id']:r for r in self.recipient_devices()}
-            store.ensure_recipients(event['id'],list(recipients.values()))
-            deliveries=store.recipient_deliveries(event['id'])
-            if not deliveries:
-                store.mark(event['id'],'recorded','No Telegram accounts have alerts enabled');continue
-            for d in deliveries:
-                if d['status']!='pending':continue
-                target=recipients.get(d['recipient'])
-                if not target:
-                    store.recipient_result(event['id'],d['recipient'],'cancelled');continue
-                if d['next_try']>time.time():continue
-                try:
-                    image=(self.settings.path/'events'/event['snapshot']).read_bytes()
-                    stamp=dt.datetime.fromtimestamp(event['created']).astimezone().strftime('%d %b %H:%M:%S %Z')
-                    action='Moving vehicle' if event['label']=='car' else event['label'].capitalize()+' detected'
-                    caption=f"{action} · {event['camera_name']}\n{stamp}\nConfirmed across multiple frames."
-                    age=time.time()-event['created']
-                    if age>15:caption+=f'\nDelayed delivery: {int(age)} seconds.'
-                    self.photo(image,caption,silent=mode=='silent',event_id=event['id'],chat_id=target['external_id'])
-                    store.recipient_result(event['id'],d['recipient'],'sent')
-                except Exception as exc:
-                    error=str(exc) if isinstance(exc,RuntimeError) else type(exc).__name__
-                    self.last_delivery_error=error
-                    store.recipient_result(event['id'],d['recipient'],'pending',error,min(60,5*2**min(d['attempts'],4)))
-            results=store.recipient_deliveries(event['id'])
-            waiting=[d for d in results if d['status']=='pending']
-            sent=sum(d['status']=='sent' for d in results)
-            if waiting:
-                self.last_delivery_error=waiting[0]['error'] or 'Delivery pending'
-                store.mark(event['id'],'pending',f'Delivered to {sent}/{len(results)} accounts; retrying',retry_in=max(1,min(d['next_try'] for d in waiting)-time.time()))
-            else:
-                self.last_delivery_error=None
-                store.mark(event['id'],'sent' if sent else 'recorded',f'Delivered to {sent} account(s)' if sent else 'Recipients revoked or paused')
-
-    def deliver(self):
-        while not self.service.stop.wait(1):
-            self.deliver_once()
+        self.service.notifications.deliver_once(self.service.store)
 
     def start(self):
-        threading.Thread(target=self.poll,name='telegram-poll',daemon=True).start()
-        threading.Thread(target=self.deliver,name='telegram-delivery',daemon=True).start()
+        if self.settings.secret('TELEGRAM_BOT_TOKEN'):
+            threading.Thread(target=self.poll,name='telegram-poll',daemon=True).start()

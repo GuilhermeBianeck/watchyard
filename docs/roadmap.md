@@ -71,3 +71,10 @@ Linux CPU runtime, explicit network configuration and a private Docker Compose
 profile are prepared for a future VPS. No migration or VPS deployment has taken
 place. Image build, private VPN routing, throughput, transfer/storage costs and
 Linux field validation remain acceptance requirements. See vps-deployment.md.
+
+## M7: Stable live overlays and flexible delivery — 0.7
+
+- As a viewer, I can keep a parked car's detection box through a short inference gap without receiving a vehicle alert.
+- As an installer, I can connect one or more recorder channels or RTSP cameras without changing application code.
+- As an owner, I can keep Telegram or opt into Pushover and a signed webhook, with retries tracked per destination.
+- Acceptance: verify the four installed streams, test inventory sizes and camera mapping, and verify signed payloads, independent retries, and secret isolation.

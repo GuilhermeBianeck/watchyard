@@ -1,4 +1,4 @@
-# Smooth live view and independent analysis (0.6)
+# Smooth live view and independent analysis
 
 Home now plays muted live video for the camera tiles currently visible on screen.
 Tap a tile for a larger player with native controls. **Go live** reconnects at the
@@ -26,8 +26,10 @@ Now the viewing and analysis paths are independent:
   2 fps per camera. New installations default to 1. Existing preferences survive
   upgrades; this home instance was explicitly switched to 1 fps.
 - **Status/history:** metadata still refreshes every 3 seconds. That timer does
-  not pace live video. Event snapshots keep their detection annotations; live
-  video is independent and has no potentially stale detection boxes overlaid.
+  not pace live video. A separate, lightweight overlay refresh shows recent
+  detections. Boxes persist for up to four seconds across missed detections.
+  Playback has a short buffer, so fast-moving objects can temporarily look out
+  of sync with their boxes. Event snapshots retain their own annotations.
 
 Three matching observations are still required. At 1 fps, confirmation normally
 needs roughly two seconds of observations plus processing and capture timing.
@@ -36,7 +38,7 @@ jitter, but does not turn a single detection into an alert. Choose 2 fps for fas
 movement/response, then assess the effect against real day/night footage.
 
 Lower analysis rates reduce model calls, scaling and raw frame transfers. The
-four analysis capture workers still receive and decode their source streams;
+analysis capture workers still receive and decode their source streams;
 changing analysis fps does not change the NVR's source bitrate or recording fps.
 
 ## Resource use and lifecycle
@@ -49,7 +51,7 @@ encoder and still needs resource/field validation for a future deployment.
 Tiles outside the viewport stop loading. Opening a camera sheet pauses background
 tile streams. Activity, Settings, other sheets and hidden tabs release their
 live players. After 20 idle seconds, the server stops that camera's encoder and
-removes its temporary files. The four analysis capture workers continue running.
+removes its temporary files. The analysis capture workers continue running.
 An encoder can also be retained by another viewer still watching that camera.
 
 The live cache is `live/` in the private Watchyard data directory. Five one-second

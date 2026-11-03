@@ -7,10 +7,12 @@ import uuid
 import cv2
 import psutil
 
+from . import __version__
 from .capture import Camera, draw_detection
 from .rules import Tracker
 from .store import Store
 from .telegram import Telegram
+from .notifications import Notifications
 from .policy import decision
 from .runtime import Runtime
 from .replay import Clips
@@ -27,9 +29,10 @@ class Service:
         self.store = Store(settings.path)
         self.clips = Clips(settings,self.stop)
         self.live = Live(settings,self.stop)
-        self.cameras = {i:Camera(i,settings,self.stop) for i in range(1,5)}
+        self.cameras = {i:Camera(i,settings,self.stop) for i in (c['id'] for c in settings.snapshot()['cameras'])}
         self.trackers = {i:Tracker() for i in self.cameras}
         self.telegram = Telegram(settings,self)
+        self.notifications = Notifications(settings,self.telegram)
         self.started = time.time()
         self.detector = 'loading'
         self.detector_error = None
@@ -43,6 +46,7 @@ class Service:
         for camera in self.cameras.values():
             camera.start()
         self.telegram.start()
+        self.notifications.start(self.store,self.stop)
         threading.Thread(target=self.detect,name='detector',daemon=True).start()
         self.monitor_thread = threading.Thread(target=self.monitor,name='health-monitor',daemon=True)
         self.monitor_thread.start()
@@ -96,9 +100,7 @@ class Service:
                             continue
                         coords = box.xyxy[0].cpu().tolist()
                         detections.append({'label':label,'confidence':float(box.conf[0]),'box':[max(0,min(1,v/(w if i%2==0 else h))) for i,v in enumerate(coords)]})
-                    camera.detections = detections
-                    camera.detected_at = time.time()
-                    camera.detected_sequence = sequence
+                    camera.publish_detections(detections, sequence)
                     camera.analysed_frames += 1
                     camera.inference_ms = round((time.perf_counter()-start)*1000,1)
                     window=max(3,config['confirmation_frames']/config['inference_fps']+.5)
@@ -124,10 +126,14 @@ class Service:
         status = 'pending' if mode!='off' else 'recorded'
         if not config['enabled'] or config['muted_until'] > time.time():
             status = 'muted'
-        elif not self.telegram.paired():
+        elif status == 'pending' and not self.notifications.targets():
             status = 'unpaired'
         self.store.add(camera,event['label'],event['confidence'],name,status,reason,mode)
         log.info('Confirmed %s on camera %s (%s)',event['label'],camera['id'],status)
+
+    def overlays(self):
+        return {c['id']: self.cameras[c['id']].display_detections(c)
+                for c in self.settings.snapshot()['cameras']}
 
     def status(self):
         now = time.time()
@@ -135,19 +141,19 @@ class Service:
         cameras = []
         for c in config['cameras']:
             camera = self.cameras[c['id']]
-            cameras.append({**c,'online':now-camera.captured_at<12,'captured_at':camera.captured_at,'detected_at':camera.detected_at,'inference_ms':camera.inference_ms,'analysed_frames':camera.analysed_frames,'decoder':camera.mode,'reconnects':camera.reconnects,'error':camera.last_error,'detections':camera.detections if now-camera.detected_at<6 else []})
+            cameras.append({**c,'online':now-camera.captured_at<12,'captured_at':camera.captured_at,'detected_at':camera.detected_at,'inference_ms':camera.inference_ms,'analysed_frames':camera.analysed_frames,'decoder':camera.mode,'reconnects':camera.reconnects,'error':camera.last_error,'detections':camera.display_detections(c)})
         process = psutil.Process()
         children = process.children(recursive=True)
         ram = process.memory_info().rss
         for child in children:
             try: ram += child.memory_info().rss
             except psutil.Error: pass
-        return {'version':'0.6.0','started':self.started,'detector':self.detector,'detector_error':self.detector_error,'cameras':cameras,'settings':config,'live':self.live.status(),'telegram':{'paired':self.telegram.paired(),'accounts':len(self.telegram.members.recipients()),'username':self.telegram.username,'error':self.telegram.last_error,'last_success':self.telegram.last_success,'last_send_at':self.telegram.last_send_at,'delivery_error':self.telegram.last_delivery_error,'poll_error':self.telegram.last_poll_error},'memory_mb':round(ram/1024**2),'system_memory_percent':psutil.virtual_memory().percent}
+        return {'version':__version__,'started':self.started,'detector':self.detector,'detector_error':self.detector_error,'cameras':cameras,'settings':config,'live':self.live.status(),'notifications':self.notifications.status(),'telegram':{'paired':self.telegram.paired(),'accounts':len(self.telegram.members.recipients()),'username':self.telegram.username,'error':self.telegram.last_error,'last_success':self.telegram.last_success,'last_send_at':self.telegram.last_send_at,'delivery_error':self.telegram.last_delivery_error,'poll_error':self.telegram.last_poll_error},'memory_mb':round(ram/1024**2),'system_memory_percent':psutil.virtual_memory().percent}
 
     def status_text(self):
         status = self.status()
         online = sum(c['online'] for c in status['cameras'])
-        message = f"Watchyard\nCameras: {online}/4 online\nDetector: {status['detector']}\nAlerts: {'muted' if status['settings']['muted_until']>time.time() or not status['settings']['enabled'] else 'enabled'}\nMemory (service + video processes): {status['memory_mb']} MB"
+        message = f"Watchyard\nCameras: {online}/{len(status['cameras'])} online\nDetector: {status['detector']}\nAlerts: {'muted' if status['settings']['muted_until']>time.time() or not status['settings']['enabled'] else 'enabled'}\nMemory (service + video processes): {status['memory_mb']} MB"
         if status['detector_error']:
             message += '\nDetection problem: '+status['detector_error']
         return message

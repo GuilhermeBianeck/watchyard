@@ -1,2 +1,2 @@
-"""Watchyard: local camera detection and Telegram alerts."""
-__version__ = "0.6.0"
+"""Watchyard: local camera monitoring and configurable alerts."""
+__version__ = "0.7.0"

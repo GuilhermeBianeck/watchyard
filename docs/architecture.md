@@ -1,12 +1,12 @@
 # Architecture and operations
 
-Four RTSP substreams -> one FFmpeg worker per camera -> latest frame buffers -> shared Core ML detector -> per-camera object tracker and zone rules -> SQLite event queue and local JPEG -> per-recipient delivery queue -> Telegram Bot API -> approved mobile/desktop accounts.
+Configured RTSP streams feed one FFmpeg capture worker per camera. The shared detector processes the latest frames, and per-camera tracking and zone rules decide which events to save. SQLite stores the local event and delivery state. Enabled adapters deliver alerts to Telegram, Pushover, or a custom webhook.
 
 The service uses macOS VideoToolbox where available and falls back to software decoding. The detector receives camera frames sequentially and handles the four supported COCO categories. The tracker confirms repeated observations and checks the bottom center of bounding boxes against a polygon. The simple nearest/overlap tracker can lose identities when objects overlap; it does not perform face recognition or re-identification across cameras.
 
 Files in `~/Library/Application Support/Watchyard`: `secrets.json` (mode 0600), `settings.json`, `events.db`, event images, model, runtime and logs. The Node.js gateway listens on port 8765 on the home network and forwards to Python on 127.0.0.1:8766. It overwrites forwarded client identity; Python trusts these headers only from loopback. Host, Origin and subnet checks apply. Off-device API and picture requests require a signed HttpOnly, SameSite session. An eight-digit dashboard code is stored only as a keyed hash with rate-limited login attempts. Resetting its signing key revokes sessions. Transport is local HTTP, so use a trusted home network. Separate per-user LaunchAgents start the detector and web gateway at login; the detector runs under caffeinate; no port forwarding is configured. Telegram bot credentials must be rotated through BotFather if exposed. Update secrets locally and restart the service after rotation.
 
-The detector may miss objects or hallucinate them; a quiet period is not proof of absence. Telegram messages and snapshots leave the Mac; unavailable service or internet delays delivery. Camera offline notifications originate from the Mac and cannot report its own failure. Recording and NVR settings are not controlled by this service.
+The detector may miss objects or hallucinate them; a quiet period is not proof of absence. Alert data leaves the host when a provider is enabled; provider or internet outages delay delivery. Camera offline notifications originate from the Mac and cannot report its own failure. Recording and NVR settings are not controlled by this service.
 
 Version 0.3 adds a separate watchdog LaunchAgent and durable health outbox. It polls the local dashboard and detector status, and delivers queued camera/service health notices independently of the detector process. The same SQLite database stores review labels, notification timestamps and per-minute resource samples. See alerts-and-reliability.md for limits.
 
@@ -35,3 +35,9 @@ segment cache is served through the same API and gateway. Encoders stop after
 20 idle seconds. Native HLS or a locally bundled HLS.js player handles viewing.
 Analysis capture now samples at the chosen 1/2 fps, with detector scheduling and
 confirmation timing independent of live playback. See live-view.md.
+
+The camera inventory maps stable IDs to a source adapter and optional replay
+tracks. Capture and HLS resolve upstream URLs through the same adapter. A separate
+display cache holds recent boxes across missed inference frames; the event tracker
+continues to use raw detections. Notification adapters consume the same event
+and health outboxes with independent delivery state per destination.

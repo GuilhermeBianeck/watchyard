@@ -8,7 +8,6 @@ import sqlite3
 import subprocess
 import threading
 import time
-from urllib.parse import quote
 import uuid
 import xml.etree.ElementTree as ET
 
@@ -16,6 +15,7 @@ import requests
 from requests.auth import HTTPDigestAuth
 
 from .runtime import Runtime
+from .sources import CameraSources
 
 log = logging.getLogger('watchyard.replay')
 CLIP_ID = re.compile(r'^[0-9a-f]{32}$')
@@ -46,6 +46,7 @@ class Recorder:
     def __init__(self, settings):
         self.settings = settings
         self.playback_offset = 0
+        self.sources = CameraSources(settings)
 
     def request(self, method, path, body=None):
         s = requests.Session()
@@ -69,7 +70,14 @@ class Recorder:
         except (requests.RequestException, ET.ParseError):
             raise ReplayError('Cannot reach the recorder. Check its connection and try again.') from None
 
+    def track(self, camera):
+        track = self.sources.track(camera)
+        if track is None:
+            raise ReplayError('Recorder replay is not configured for this camera.')
+        return track
+
     def search(self, camera, start, end):
+        track = self.track(camera)
         clock = self.request('GET', '/ISAPI/System/time')
         try:
             local = dt.datetime.fromisoformat(xml_text(clock, 'localTime').replace('Z', '+00:00'))
@@ -85,7 +93,7 @@ class Recorder:
         root = ET.Element('CMSearchDescription')
         ET.SubElement(root, 'searchID').text = str(uuid.uuid4())
         tracks = ET.SubElement(root, 'trackList')
-        ET.SubElement(tracks, 'trackID').text = str(camera * 100 + 1)
+        ET.SubElement(tracks, 'trackID').text = str(track)
         span = ET.SubElement(ET.SubElement(root, 'timeSpanList'), 'timeSpan')
         ET.SubElement(span, 'startTime').text = utc_text(start + self.playback_offset)
         ET.SubElement(span, 'endTime').text = utc_text(end + self.playback_offset)
@@ -101,7 +109,7 @@ class Recorder:
         for item in result.iter():
             if item.tag.split('}')[-1] != 'searchMatchItem':
                 continue
-            if xml_text(item, 'trackID') != str(camera * 100 + 1):
+            if xml_text(item, 'trackID') != str(track):
                 continue
             try:
                 a = parse_time(xml_text(item, 'startTime')) - self.playback_offset
@@ -114,10 +122,7 @@ class Recorder:
 
     def replay_url(self, camera, start, end):
         # Construct our own URI: never follow a host or credentials returned by a recorder.
-        user = quote(self.settings.secret('NVR_USERNAME', 'admin'), safe='')
-        password = quote(self.settings.secret('NVR_PASSWORD', ''), safe='')
-        host = self.settings.secret('NVR_HOST', '127.0.0.1')
-        return (f'rtsp://{user}:{password}@{host}:554/Streaming/tracks/{camera * 100 + 1}/'
+        return (f'{self.sources.recorder_base()}/Streaming/tracks/{self.track(camera)}/'
                 f'?starttime={utc_text(start + self.playback_offset, True)}&endtime={utc_text(end + self.playback_offset, True)}')
 
 
@@ -172,6 +177,7 @@ class Clips:
                 self.db.execute('UPDATE clips SET accessed=? WHERE id=?', (now, row['id']))
                 self.db.commit()
                 return self.get(row['id'])
+            self.recorder.track(event['camera'])
             count = self.db.execute("SELECT count(*) FROM clips WHERE state IN ('queued','preparing')").fetchone()[0]
             if count >= 8:
                 raise ReplayError('The replay queue is full. Try again after a clip finishes.')

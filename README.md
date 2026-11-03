@@ -1,20 +1,15 @@
 # Watchyard
 
-Local camera monitoring for an Apple Silicon Mac, with Telegram alerts for people, moving vehicles, dogs and cats. The existing NVR remains responsible for recording. Watchyard is an early pilot: verify detections and tune zones before relying on it.
+Watchyard adds local object detection, live viewing, and useful alerts to the cameras you already own. It recognizes people, moving vehicles, dogs, and cats. It works with ANNKE/Hikvision-style recorders and standalone RTSP streams. Your recorder can continue to handle continuous recording.
 
-## Current deployment
+- **Live:** Watch on iPhone, Android, or desktop at up to 720p and 10 fps. Analysis runs independently at 1 or 2 fps per camera. Boxes stay visible through short gaps in recognition.
+- **Activity:** Review events, export metadata, and watch, save, or download clips from a supported recorder.
+- **Alerts:** Set zones, schedules, and sound preferences per camera. Use Telegram, optional Pushover, a signed webhook for your own app, or local history alone.
+- **Access:** Invite household members to the dashboard or Telegram with one-use links. Choose view-only or management access and revoke devices individually.
 
-The dashboard runs on the Mac at http://127.0.0.1:8765 and on the home Wi-Fi using the Mac’s IP address with port 8765. Other devices sign in with the owner code or a one-use invitation. Four NVR substreams are decoded with FFmpeg and analysed locally with YOLO11 nano and Core ML. Notifications and selected snapshots go to approved Telegram accounts. Detection and event snapshots stay on the Mac; Telegram receives the alerts and images sent to it. Telegram bot chats are not end-to-end encrypted.
+## Get started on macOS
 
-The macOS services start after login and requests that the Mac stay awake. It needs network access to the NVR and internet for Telegram. A closed lid, logout, power loss or network outage may stop monitoring. A small Node.js gateway serves the dashboard on home Wi-Fi; the Python service stays on loopback. A separate watchdog is needed to notify you if the Mac itself stops.
-
-## Use
-
-Open the dashboard to view cameras, inspect events, set alert zones and mute notifications. In Telegram use `/status`, `/snapshot` (or `/snapshot 1` through `/snapshot 4`), `/events`, `/mute 60`, `/unmute` and `/help`. By default, people and vehicles alert audibly; dogs and cats are silent. A moving vehicle must change position before alerting. Event pictures are kept locally for seven days.
-
-## Setup on macOS
-
-Requires Apple Silicon, Python 3.11, Node.js 18+, FFmpeg, a local RTSP NVR and a Telegram bot. Run from the repository:
+Use an Apple Silicon Mac with Python 3.11, Node.js 18 or later, FFmpeg, and network access to your cameras. A Telegram bot is optional.
 
 ```sh
 python3.11 -m venv .venv
@@ -25,78 +20,24 @@ python3.11 -m venv .venv
 .venv/bin/python scripts/install_service.py
 ```
 
-The configuration script prompts for credentials and creates an owner-only secrets file under `~/Library/Application Support/Watchyard`. Pair the bot using the displayed private-chat command. Do not commit credentials or event images. The model download and Python packages require internet; camera inference remains local.
+Open `http://127.0.0.1:8765` on the Mac, or `http://<Mac-IP>:8765` on the same Wi-Fi. Use the dashboard code or an invitation. In iPhone Safari, choose **Share → Add to Home Screen** for quick access. Keep the Mac logged in and awake; the service starts after login. Use `sh scripts/service.sh status` to inspect it and `restart`, `stop`, or `start` to manage it.
 
-Check `sh scripts/service.sh status`; use `restart`, `stop` or `start` with the same script. Logs and data are in `~/Library/Application Support/Watchyard`. Stop monitoring by running `sh scripts/service.sh stop`; this preserves the data and service configuration.
+The service stores configuration, events, clips, models, and logs under `~/Library/Application Support/Watchyard` by default. Set `WATCHYARD_DATA` to override the data directory consistently for setup and runtime. Keep credentials in its private `secrets.json`. Use only trusted home Wi-Fi for plain HTTP; use a private VPN for remote access and do not expose the dashboard or RTSP ports publicly.
 
-## iPhone access
+## Connect cameras and alerts
 
-Connect your iPhone to the same home Wi-Fi as the Mac. In Safari, open
-`http://<Mac-IP>:8765` and enter the dashboard code. Safari’s Share menu can add
-it to the Home Screen, with a dedicated icon. The Home, Activity and Settings
-tabs adapt to iPhone, iPad and desktop. Appearance follows your device.
-Camera pictures refresh every three seconds; these are previews rather than
-continuous video. Tap a camera for an expanded view or its settings icon to
-edit an alert area.
+[Configure the camera inventory](docs/cameras-and-notifications.md#camera-inventory) to use one or more recorder channels, independent RTSP streams, or both. Camera IDs are stable and can differ from recorder channel numbers. Recorder replay is available where a compatible track is mapped; RTSP alone supplies live video and detection.
 
-The code is separate from your NVR password. Sessions last 30 days. Sign out in
-Settings, or reset the code and revoke all sessions using
-`.venv/bin/python scripts/dashboard_code.py`, then restart the service. Keep the
-code private. The interface uses HTTP on your trusted home Wi-Fi, not TLS; do
-not forward its port to the internet. Other devices cannot fetch camera data
-without signing in, and clients outside the home subnet are rejected. The Mac's
-loopback address retains direct local access. If the Mac’s IP or network changes,
-restart Watchyard to refresh the host/subnet allowlist. Guest Wi-Fi isolation or
-a firewall rule may prevent mobile access.
+[Configure notification providers](docs/cameras-and-notifications.md#notification-providers) to enable one or several delivery methods. Telegram is the default when paired. Pushover and custom webhooks are opt-in. A custom app can receive signed events through its own server and forward them to APNs or FCM. Use **Settings → Send test to enabled destinations** to check setup. If you use Telegram, try `/status`, `/snapshot` for all views, `/snapshot <camera-id>` for one, or `/help`.
 
-## Tests and limitations
+Camera analysis and history stay on the server. Telegram receives alert images; Pushover receives text and optionally a snapshot; webhooks receive event metadata. Review the provider settings before enabling delivery.
 
-Run `.venv/bin/python -m pytest -q`. Rules require repeated detections, use the bottom of the bounding box for zones, suppress duplicates within a track and require movement for vehicles. Tracking is basic: occlusions, nighttime lighting, small distant animals and rapid motion can cause missed or duplicate alerts. Thresholds and zones trade false positives against missed events. Telegram delivery depends on internet and phone notification settings. Failed notifications retry for up to three minutes; older events remain local.
+## Deployment and operation
 
-See [requirements](docs/requirements.md), [architecture](docs/architecture.md), [stories and milestones](docs/roadmap.md), and [design](docs/design.md). YOLO and the Ultralytics library use AGPL licensing; review their terms before distributing or offering this as a service.
+The Mac runs the dashboard gateway, detection and replay service, and a same-host watchdog. The [optional Linux / VPS profile](docs/vps-deployment.md) uses Docker Compose and a private route to your home recorder. It remains an alternative deployment path; it has not been tested against this home's live cameras on a VPS.
 
-## Release 0.3
+- [Live viewing](docs/live-view.md) and [recorder replay](docs/replay-and-clips.md)
+- [Devices and accounts](docs/devices-and-accounts.md) and [alert rules and reliability](docs/alerts-and-reliability.md)
+- [Architecture](docs/architecture.md), [requirements](docs/requirements.md), and [roadmap](docs/roadmap.md)
 
-Per-camera schedules and Sound/Silent/Local history controls are available in
-Settings. Review events on the dashboard or Telegram; export retained metadata
-from Activity. Reliability settings show queue state, measured delivery delay,
-local reviews and the independent service watchdog. See
-[alert controls and reliability](docs/alerts-and-reliability.md) for schedule
-semantics, migration and outage limitations. No external service or paid
-subscription was added.
-
-## Future Linux / VPS option
-
-The repository also provides an optional [VPS deployment guide](docs/vps-deployment.md)
-and [Docker Compose profile](deploy/vps/compose.yaml). It uses a private VPN route
-to the home NVR, a portable CPU detector, persistent storage and authenticated
-VPN-only dashboard access. The current Mac service remains local. The optional
-profile has not been deployed to a VPS; validate its image, routing and resource
-use before migration.
-
-## Devices and accounts (0.4)
-
-Settings → Devices & accounts registers other phone/desktop browsers and Telegram
-accounts using named, one-use invitations. Choose View only or Manage home, revoke
-access, and manage individual Telegram alert subscriptions. See
-[devices and accounts](docs/devices-and-accounts.md). Existing owner access is
-preserved. Telegram account registration applies to all Telegram clients logged
-into that account; dashboard access remains on the allowed private network.
-
-## Alert replay and saved clips (0.5)
-
-Open an alert and choose **Watch replay** to retrieve the recording around it
-from the NVR. Download the mobile MP4 or, with management access, choose **Keep
-clip** to preserve it under Activity → Saved clips. New Telegram alerts link to
-the authenticated replay page on home Wi-Fi. Clips are prepared one at a time;
-continuous recording remains on the NVR. See [replay and clips](docs/replay-and-clips.md)
-for quality, retention, storage limits and recorder requirements.
-
-## Live video and analysis rate (0.6)
-
-Visible Home tiles and the expanded camera player now stream live video at up to
-720p/10 fps. Live feeds are shared between viewers and stop when no longer watched.
-Detection runs independently at a selectable 1 or 2 fps per camera under Settings
-→ Detection. Lower rates reduce analysis work but can miss brief movement. The
-three-second status refresh no longer limits the displayed video frame rate.
-See [live view](docs/live-view.md) for buffering, resource use and browser support.
+Run `.venv/bin/python -m pytest -q` to verify the app. Detection can miss brief movement, distant objects, or difficult lighting. Playback is buffered and boxes reflect the latest analysis, so fast movement can temporarily appear out of sync. Push delivery is best effort; the same-host watchdog cannot report when the entire host loses power or connectivity. Review the YOLO and Ultralytics AGPL terms before redistribution.

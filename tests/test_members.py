@@ -191,7 +191,6 @@ def test_concurrent_invitation_use_registers_only_one_device(tmp_path):
 
 
 def test_health_delivery_is_tracked_per_recipient(tmp_path):
-    from watchyard.watchdog import flush_health
     service,_,_=setup(tmp_path);service.settings.save_secrets({'TELEGRAM_CHAT_ID':123})
     m=service.telegram.members;m.sync_owner();invite=m.invite('telegram','Other','viewer');m.accept(invite['code'],'telegram','456',client='tg')
     s=service.store;s.observe_health('cam','Gate',False,now=0);s.observe_health('cam','Gate',False,now=60)
@@ -199,9 +198,9 @@ def test_health_delivery_is_tracked_per_recipient(tmp_path):
     def text(*a,**kw):
         calls.append(str(kw['chat_id']))
         if str(kw['chat_id'])=='456':raise RuntimeError('offline')
-    service.telegram.text=text;flush_health(s,service.telegram)
+    service.telegram.text=text;service.notifications.flush_health(s)
     s.db.execute('UPDATE health_outbox SET next_try=0');s.db.execute('UPDATE recipient_deliveries SET next_try=0');s.db.commit()
     service.telegram.text=lambda *a,**kw:calls.append(str(kw['chat_id']))
-    flush_health(s,service.telegram)
+    service.notifications.flush_health(s)
     assert calls.count('123')==1 and calls.count('456')==2
     assert s.diagnostics()['health_events'][0]['status']=='sent'

@@ -4,10 +4,10 @@ import shutil
 import subprocess
 import threading
 import time
-from urllib.parse import quote
 import uuid
 
 from .runtime import Runtime
+from .sources import CameraSources
 
 SEGMENT = re.compile(r'^[0-9a-f]{12}-[0-9]{6,12}\.ts$')
 
@@ -34,10 +34,7 @@ class LiveFeed:
             if f.is_file(): f.unlink(missing_ok=True)
 
     def command(self):
-        s = self.settings
-        user = quote(s.secret('NVR_USERNAME', 'admin'), safe='')
-        password = quote(s.secret('NVR_PASSWORD', ''), safe='')
-        url = f"rtsp://{user}:{password}@{s.secret('NVR_HOST','127.0.0.1')}:554/Streaming/Channels/{self.camera}02"
+        url = CameraSources(self.settings).stream(self.camera)
         args = [shutil.which('ffmpeg') or 'ffmpeg', '-nostdin', '-hide_banner', '-loglevel', 'error',
                 '-rtsp_transport', 'tcp', '-timeout', '10000000',
                 '-analyzeduration', '1000000', '-probesize', '262144']
@@ -132,7 +129,7 @@ class LiveFeed:
 class Live:
     def __init__(self, settings, stop):
         self.stop = stop
-        self.feeds = {i: LiveFeed(i, settings) for i in range(1, 5)}
+        self.feeds = {i: LiveFeed(i, settings) for i in (c['id'] for c in settings.snapshot()['cameras'])}
         self.thread = None
 
     def start(self):
