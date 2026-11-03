@@ -72,10 +72,10 @@ The content policy allows local media and the local blob media buffers needed
 by browser playback. Script and network sources remain restricted to this app.
 See THIRD_PARTY.md and the bundled upstream license notices.
 
-## Shared ingest pilot
+## Shared ingest
 
 Set `"shared_ingest": true` on a camera in `settings.json` and restart Watchyard
-to try the shared path. It uses one FFmpeg input and decoder to produce both
+to enable the shared path. It is enabled for all four cameras on the current Mac installation. It uses one FFmpeg input and decoder to produce both
 H.264 HLS and sampled analysis frames while the feed is being watched. The
 capture worker stays available until the shared worker produces both outputs.
 When viewers leave, the dedicated worker resumes before the live worker closes,

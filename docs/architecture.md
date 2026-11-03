@@ -41,3 +41,16 @@ tracks. Capture and HLS resolve upstream URLs through the same adapter. A separa
 display cache holds recent boxes across missed inference frames; the event tracker
 continues to use raw detections. Notification adapters consume the same event
 and health outboxes with independent delivery state per destination.
+
+
+Shared ingest in 0.8.3 combines live video and sampled analysis frames in one
+FFmpeg worker while a feed is watched. Dedicated capture resumes when viewing
+ends or the shared worker fails. The local installation enables this on all four
+cameras.
+
+Activity correlation stores group assignments and suppresses repeat Telegram
+deliveries per account after Telegram accepts an alert for the group. Each
+member retains its own replay. The optional macOS plate reader samples the
+recorder main stream after a vehicle event and stores only readings that agree
+across multiple frames. See [activity groups](activity-correlation.md) and
+[plate reading](cameras-and-notifications.md#plate-reading-pilot-on-macos).
