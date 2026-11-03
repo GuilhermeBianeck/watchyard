@@ -118,7 +118,7 @@ def create_app(service=None, run_service=True):
         if run_service:
             service.close()
 
-    app = FastAPI(title='Watchyard',version='0.5.0',lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
+    app = FastAPI(title='Watchyard',version='0.5.1',lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
     app.state.service = service
     app.add_middleware(TrustedHostMiddleware,allowed_hosts=list(runtime.allowed_hosts) if runtime.allowed_hosts else ['localhost','127.0.0.1','testserver',address,hostname,hostname.split('.')[0]+'.local',bonjour])
 
@@ -233,6 +233,12 @@ def create_app(service=None, run_service=True):
         writer.writeheader()
         writer.writerows(service.store.recent(5000))
         return Response(stream.getvalue(),media_type='text/csv',headers={'Content-Disposition':'attachment; filename="watchyard-events.csv"'})
+
+    @app.get('/api/events/{event_id}/details')
+    def event_details(event_id:str):
+        event=service.store.event(event_id)
+        if event is None:raise HTTPException(404,'This alert is no longer in history. Check Saved clips in Activity.')
+        return event
 
     @app.post('/api/events/{event_id}/replay')
     def request_replay(event_id:str):

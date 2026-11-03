@@ -154,8 +154,10 @@ def test_viewer_can_prepare_and_download_but_not_keep_and_revocation_stops_range
     viewer=TestClient(app,base_url='http://192.168.1.144:8765',client=('192.168.1.27',50000))
     route='/api/clips/'+clip['id']
     assert viewer.get(route+'/video',headers={'Range':'bytes=0-9'}).status_code==401
+    assert viewer.get('/api/events/'+clip['event_id']+'/details').status_code==401
     invite=owner.post('/api/invitations',headers=H,json={'kind':'browser','name':'Viewer'}).json()
     assert viewer.post('/api/login',headers=H,json={'code':invite['code']}).status_code==200
+    assert viewer.get('/api/events/'+clip['event_id']+'/details').json()['id']==clip['event_id']
     assert viewer.post('/api/events/'+clip['event_id']+'/replay',headers=H,json={}).json()['id']==clip['id']
     response=viewer.get(route+'/video',headers={'Range':'bytes=10-19'})
     assert response.status_code==206 and response.content==b'video-data'
@@ -194,3 +196,13 @@ def test_telegram_alert_has_private_authenticated_replay_link(tmp_path,monkeypat
     links=[b['url'] for row in keyboard for b in row if 'url' in b]
     assert links==['http://192.168.1.144:8765/#event='+'a'*32]
     assert 'watchyard_session' not in links[0] and '@' not in links[0]
+
+
+def test_retained_alert_lookup_works_beyond_recent_activity(tmp_path):
+    service=Service(Settings(tmp_path));old=old_event(service)
+    service.store.db.execute('UPDATE events SET created=1 WHERE id=?',(old['id'],));service.store.db.commit()
+    for _ in range(85):service.store.add({'id':1,'name':'Gate'},'car',.9,'a'*32+'.jpg')
+    client=TestClient(create_app(service,run_service=False))
+    assert old['id'] not in [e['id'] for e in client.get('/api/events').json()]
+    assert client.get('/api/events/'+old['id']+'/details').json()['camera']==2
+    assert client.get('/api/events/'+'f'*32+'/details').status_code==404

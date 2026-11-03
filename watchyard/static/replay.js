@@ -91,8 +91,12 @@
   }catch(e){notice(e.message);}finally{button.disabled=false;}
  });
  player.addEventListener('error',()=>{if(current&&loaded){show('replay-error',true);$('replay-error').textContent='The video could not load. Try again or download the clip.';show('retry-replay',Boolean(current.event));}});
- window.WatchyardReplay={refreshSaved,reset,openEvent(id){
-  const event=events.find(e=>e.id===id);
-  if(event)open({event});else notice('This alert is no longer in history. Check Saved clips in Activity.');
+ window.WatchyardReplay={refreshSaved,reset,async openEvent(id){
+  let event=events.find(e=>e.id===id);
+  if(!event){
+   try{event=await api('/api/events/'+encodeURIComponent(id)+'/details');}
+   catch(e){notice(e.message);return;}
+  }
+  if(signedIn)open({event});
  }};
 })();

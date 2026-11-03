@@ -136,7 +136,7 @@ class Service:
         for child in children:
             try: ram += child.memory_info().rss
             except psutil.Error: pass
-        return {'version':'0.5.0','started':self.started,'detector':self.detector,'detector_error':self.detector_error,'cameras':cameras,'settings':config,'telegram':{'paired':self.telegram.paired(),'accounts':len(self.telegram.members.recipients()),'username':self.telegram.username,'error':self.telegram.last_error,'last_success':self.telegram.last_success,'last_send_at':self.telegram.last_send_at,'delivery_error':self.telegram.last_delivery_error,'poll_error':self.telegram.last_poll_error},'memory_mb':round(ram/1024**2),'system_memory_percent':psutil.virtual_memory().percent}
+        return {'version':'0.5.1','started':self.started,'detector':self.detector,'detector_error':self.detector_error,'cameras':cameras,'settings':config,'telegram':{'paired':self.telegram.paired(),'accounts':len(self.telegram.members.recipients()),'username':self.telegram.username,'error':self.telegram.last_error,'last_success':self.telegram.last_success,'last_send_at':self.telegram.last_send_at,'delivery_error':self.telegram.last_delivery_error,'poll_error':self.telegram.last_poll_error},'memory_mb':round(ram/1024**2),'system_memory_percent':psutil.virtual_memory().percent}
 
     def status_text(self):
         status = self.status()
