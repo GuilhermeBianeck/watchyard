@@ -183,3 +183,22 @@ h1 { font-size: clamp(28px, 3vw, 38px); letter-spacing: -.045em; }
   .event-row .event { padding-inline: 8px; }
   .event-row .event-play { margin-right: 3px; }
 }
+
+.correlation-preview {
+  margin: 0 0 16px;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.correlation-preview summary { padding: 12px 0; cursor: pointer; font-weight: 650; }
+.correlation-preview summary span { margin-left: 6px; color: var(--secondary); font-size: 12px; font-weight: 400; }
+.correlation-preview p, .correlation-preview small { color: var(--secondary); font-size: 12px; }
+#correlation-groups { margin: 8px 0; }
+#correlation-groups section { padding: 10px 0; border-top: 1px solid var(--line); }
+#correlation-groups h3 { font-size: 14px; }
+#correlation-groups ul { list-style: none; margin: 4px 0 0; padding: 0; }
+#correlation-groups li { display: flex; align-items: center; gap: 10px; font-size: 12px; }
+#correlation-groups li small { display: block; }
+#correlation-groups button { min-height: 44px; padding: 4px; color: var(--blue); text-align: left; }
+#correlation-groups button svg { width: 14px; height: 14px; vertical-align: middle; }

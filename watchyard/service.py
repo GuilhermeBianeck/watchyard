@@ -18,6 +18,7 @@ from .runtime import Runtime
 from .replay import Clips
 from .live import Live
 from .plates import Plates
+from .correlation import hint as correlation_hint
 
 log = logging.getLogger('watchyard')
 
@@ -141,8 +142,15 @@ class Service:
             status = 'muted'
         elif status == 'pending' and not self.notifications.targets():
             status = 'unpaired'
+        activity_hint = None
+        if event['label'] in ('person', 'car'):
+            try:
+                activity_hint = correlation_hint(frame, event['box'])
+            except (cv2.error, ValueError):
+                log.debug('Activity cues unavailable for camera %s', camera['id'])
         event_id = self.store.add(camera,event['label'],event['confidence'],name,status,reason,mode,
-                                  first_seen=first_seen,last_seen=last_seen)
+                                  first_seen=first_seen,last_seen=last_seen,
+                                  correlation_hint=activity_hint)
         if event['label'] == 'car':
             self.plates.submit(camera, event_id)
         log.info('Confirmed %s on camera %s (%s)',event['label'],camera['id'],status)

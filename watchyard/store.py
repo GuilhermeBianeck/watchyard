@@ -18,7 +18,7 @@ class Store:
             label TEXT, confidence REAL, snapshot TEXT, status TEXT,
             attempts INTEGER DEFAULT 0, next_try REAL DEFAULT 0, detail TEXT DEFAULT '')""")
         columns={r[1] for r in self.db.execute('PRAGMA table_info(events)')}
-        for name,definition in [('feedback',"TEXT DEFAULT 'unreviewed'"),('sent_at','REAL'),('notify_mode',"TEXT DEFAULT ''"),('first_seen','REAL'),('last_seen','REAL'),('plate','TEXT')]:
+        for name,definition in [('feedback',"TEXT DEFAULT 'unreviewed'"),('sent_at','REAL'),('notify_mode',"TEXT DEFAULT ''"),('first_seen','REAL'),('last_seen','REAL'),('plate','TEXT'),('correlation_hint','TEXT')]:
             if name not in columns:
                 self.db.execute(f'ALTER TABLE events ADD COLUMN {name} {definition}')
         self.db.execute("CREATE TABLE IF NOT EXISTS recipient_deliveries (event_id TEXT,recipient TEXT,status TEXT DEFAULT 'pending',attempts INTEGER DEFAULT 0,next_try REAL DEFAULT 0,sent_at REAL,error TEXT DEFAULT '',created REAL,PRIMARY KEY(event_id,recipient))")
@@ -28,10 +28,10 @@ class Store:
         self.db.execute("CREATE TABLE IF NOT EXISTS health_outbox (id TEXT PRIMARY KEY,key TEXT,created REAL,body TEXT,status TEXT DEFAULT 'pending',attempts INTEGER DEFAULT 0,next_try REAL DEFAULT 0)")
         self.db.commit()
 
-    def add(self,camera,label,confidence,snapshot,status='pending',detail='',notify_mode='',*,first_seen=None,last_seen=None):
+    def add(self,camera,label,confidence,snapshot,status='pending',detail='',notify_mode='',*,first_seen=None,last_seen=None,correlation_hint=None):
         key=uuid.uuid4().hex
         with self.lock:
-            self.db.execute('INSERT INTO events (id,created,camera,camera_name,label,confidence,snapshot,status,detail,notify_mode,first_seen,last_seen) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',(key,time.time(),camera['id'],camera['name'],label,confidence,snapshot,status,detail,notify_mode,first_seen,last_seen))
+            self.db.execute('INSERT INTO events (id,created,camera,camera_name,label,confidence,snapshot,status,detail,notify_mode,first_seen,last_seen,correlation_hint) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',(key,time.time(),camera['id'],camera['name'],label,confidence,snapshot,status,detail,notify_mode,first_seen,last_seen,correlation_hint))
             self.db.commit()
         return key
 
@@ -48,6 +48,13 @@ class Store:
             self.db.execute("UPDATE events SET plate=? WHERE id=? AND label='car' AND plate IS NULL",
                             (plate, event_id))
             self.db.commit()
+
+    def correlation_events(self):
+        with self.lock:
+            return [dict(row) for row in self.db.execute(
+                "SELECT id,created,camera,camera_name,label,first_seen,last_seen,feedback,plate,correlation_hint "
+                "FROM events WHERE created>=? AND label IN ('person','car') ORDER BY created DESC LIMIT 240",
+                (time.time()-7*86400,))]
 
     def recent(self,limit=50):
         with self.lock:

@@ -231,6 +231,7 @@ def create_app(service=None, run_service=True):
         return Response('ready' if ready else 'starting or degraded',status_code=200 if ready else 503)
 
     def public_event(event, owner):
+        event.pop('correlation_hint', None)
         if not owner:
             event.pop('plate', None)
         elif event.get('plate'):
@@ -238,6 +239,11 @@ def create_app(service=None, run_service=True):
             if isinstance(aliases, dict) and isinstance(aliases.get(event['plate']), str):
                 event['vehicle_name'] = aliases[event['plate']]
         return event
+
+    @app.get('/api/activity/preview')
+    def activity_preview():
+        from .correlation import preview
+        return preview(service.store.correlation_events())
 
     @app.get('/api/events')
     def events(request: Request):
