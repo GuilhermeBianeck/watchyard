@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, Response, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, SecretStr, field_validator
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from . import __version__
@@ -37,6 +37,12 @@ class Controls(BaseModel):
 class Login(BaseModel):
     code: str = Field(min_length=1,max_length=64)
     name: str = Field('New browser',min_length=1,max_length=60)
+
+
+class OwnerCredentials(BaseModel):
+    username: str
+    password: SecretStr
+    name: str = Field('New browser', min_length=1, max_length=60)
 
 
 class CameraUpdate(BaseModel):
@@ -136,9 +142,9 @@ def create_app(service=None, run_service=True):
                 return Response('Home network access only',status_code=403)
         principal=access.principal(request)
         request.state.principal = principal
-        if request.url.path.startswith('/api/') and request.url.path not in ('/api/session','/api/login'):
+        if request.url.path.startswith('/api/') and request.url.path not in ('/api/session','/api/login','/api/setup','/api/account/login'):
             if not principal:
-                return JSONResponse({'detail':'Sign in with your dashboard code'},status_code=401)
+                return JSONResponse({'detail':'Sign in to Watchyard'},status_code=401)
             replay_request=request.method=='POST' and re.fullmatch(r'/api/events/[0-9a-f]{32}/replay',request.url.path)
             administrative=request.url.path.startswith(('/api/devices','/api/invitations')) or (request.method not in ('GET','HEAD','OPTIONS') and request.url.path!='/api/logout' and not replay_request)
             if administrative and principal['role']!='admin':
@@ -161,18 +167,61 @@ def create_app(service=None, run_service=True):
     def index():
         return FileResponse(STATIC/'index.html')
 
+    def local_setup(request):
+        return access.local(request.client.host) and request.url.hostname in ('localhost','127.0.0.1')
+
     @app.get('/api/session')
     def session(request: Request):
-        return {'authenticated':access.authenticated(request),'local':runtime.local_bypass and access.local(request.client.host),'device':access.principal(request)}
+        setup_required = access.members.setup_required()
+        device = None if setup_required else request.state.principal
+        return {
+            'authenticated': device is not None,
+            'local': bool(device and device['id'] == 'local'),
+            'device': device,
+            'setup_required': setup_required,
+            'setup_local': setup_required and local_setup(request),
+            'account_login': access.members.owner_account() is not None,
+        }
+
+    def signed_in(token, request):
+        response = JSONResponse({'ok':True})
+        response.set_cookie(access.cookie,token,max_age=30*86400,httponly=True,samesite='strict',secure=request.url.scheme=='https')
+        return response
+
+    @app.post('/api/setup', status_code=201)
+    def setup(data: OwnerCredentials, request: Request):
+        if not local_setup(request):
+            raise HTTPException(403,'Open Watchyard on the server at http://127.0.0.1:8765 to create the owner account')
+        password = data.password.get_secret_value()
+        username = data.username.strip()
+        if not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_.-]{2,31}', username):
+            raise HTTPException(422,'Use 3–32 letters, numbers, periods, underscores or hyphens for your username. Start with a letter or number.')
+        if not 12 <= len(password) <= 128:
+            raise HTTPException(422,'Use a password between 12 and 128 characters')
+        token, status = access.setup(username,password,request.client.host,data.name.strip() or 'New browser')
+        if not token:
+            raise HTTPException(status,'Watchyard is already set up. Reload the page to sign in.')
+        response = signed_in(token, request)
+        response.status_code = 201
+        return response
+
+    @app.post('/api/account/login')
+    def account_login(data: OwnerCredentials, request: Request):
+        password = data.password.get_secret_value()
+        username = data.username.strip()
+        if not 12 <= len(password) <= 128 or not 3 <= len(username) <= 32:
+            raise HTTPException(401,'Incorrect username or password')
+        token, status = access.login_owner(username,password,request.client.host,data.name.strip() or 'New browser')
+        if not token:
+            raise HTTPException(status,'Try again in five minutes' if status==429 else 'Incorrect username or password')
+        return signed_in(token, request)
 
     @app.post('/api/login')
     def login(data: Login, request: Request):
         token, status = access.login(data.code.strip().replace(' ',''),request.client.host,data.name.strip() or 'New browser')
         if not token:
             raise HTTPException(status,'Try again in five minutes' if status==429 else 'Incorrect dashboard code')
-        response = JSONResponse({'ok':True})
-        response.set_cookie(access.cookie,token,max_age=30*86400,httponly=True,samesite='strict',secure=request.url.scheme=='https')
-        return response
+        return signed_in(token, request)
 
     @app.post('/api/logout')
     def logout(request:Request):
@@ -227,6 +276,13 @@ def create_app(service=None, run_service=True):
     @app.get('/healthz')
     def health():
         ready = service.ready()
+        return Response('ready' if ready else 'starting or degraded',status_code=200 if ready else 503)
+
+    @app.get('/healthz/watchdog')
+    def watchdog_health(request: Request):
+        if not local_setup(request):
+            raise HTTPException(403,'Local watchdog access only')
+        ready = service.watchdog_ready()
         return Response('ready' if ready else 'starting or degraded',status_code=200 if ready else 503)
 
     def public_event(event, owner):

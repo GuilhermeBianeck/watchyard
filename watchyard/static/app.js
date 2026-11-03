@@ -9,8 +9,8 @@ let linkedEvent=location.hash.startsWith('#event=')?location.hash.slice(7):null;
 let state=null,events=[],signedIn=false,localDevice=false,currentView='home',filter='all',activeCamera=null,editing=null,points=[],zoneImage=new Image(),tick=0,toastTimer,busy=false,eventSignature='', cameraFilter='';
 const scrollPositions={home:0,activity:0,settings:0};
 function notice(message){$('notice').textContent=message;$('notice').classList.remove('hidden');clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('notice').classList.add('hidden'),6000);}
-function showLogin(){signedIn=false;window.WatchyardReplay?.reset();window.WatchyardLive?.reset();$('app-shell').classList.add('hidden');$('login-screen').classList.remove('hidden');document.querySelectorAll('dialog[open]').forEach(d=>d.close());document.querySelectorAll('.camera-picture img').forEach(i=>i.removeAttribute('src'));}
-async function api(path,data,{signal}={}){const response=await fetch(path,data===undefined?{cache:'no-store',signal}:{method:'POST',headers:{'Content-Type':'application/json','X-Watchyard-Client':'dashboard'},body:JSON.stringify(data)});if(!response.ok){if(response.status===401&&path!=='/api/login')showLogin();const r=await response.json().catch(()=>({detail:'Cannot connect to Watchyard'}));throw Error(typeof r.detail==='string'?r.detail:'Check the values and try again');}return response.json();}
+function showLogin(){$('setup-screen').classList.add('hidden');signedIn=false;window.WatchyardReplay?.reset();window.WatchyardLive?.reset();$('app-shell').classList.add('hidden');$('login-screen').classList.remove('hidden');document.querySelectorAll('dialog[open]').forEach(d=>d.close());document.querySelectorAll('.camera-picture img').forEach(i=>i.removeAttribute('src'));}
+async function api(path,data,{signal}={}){const response=await fetch(path,data===undefined?{cache:'no-store',signal}:{method:'POST',headers:{'Content-Type':'application/json','X-Watchyard-Client':'dashboard'},body:JSON.stringify(data)});if(!response.ok){if(response.status===401&&!['/api/login','/api/account/login','/api/setup'].includes(path))showLogin();const r=await response.json().catch(()=>({detail:'Cannot connect to Watchyard'}));throw Error(typeof r.detail==='string'?r.detail:'Check the values and try again');}return response.json();}
 async function action(path,data,message){try{await api(path,data);if(message)notice(message);await refresh();}catch(e){notice(e.message);}}
 function navigate(view,writeHash=true){if(view.startsWith('join='))view='home';if(view.startsWith('event='))view='activity';if(view.startsWith('group=')){view='activity';writeHash=false;}if(!['home','activity','settings'].includes(view))view='home';scrollPositions[currentView]=window.scrollY;currentView=view;document.querySelectorAll('.view').forEach(v=>v.classList.toggle('hidden',v.id!=='view-'+view));document.querySelectorAll('[data-nav]').forEach(b=>{if(b.dataset.nav===view)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current');});if(writeHash&&location.hash!=='#'+view)history.replaceState(null,'','#'+view);window.scrollTo(0,scrollPositions[view]||0);document.title=({home:'Cameras',activity:'Activity',settings:'Settings'}[view])+' | Watchyard';if(state){renderCameras();renderEvents(true);}document.dispatchEvent(new Event('watchyard:navigate'));}
 function emptyState(message) {
@@ -179,8 +179,100 @@ function resume(){return action('/api/controls',{enabled:true,mute_minutes:0},'A
 function quiet(){return action('/api/controls',{mute_minutes:60},'Quiet time enabled for one hour');}
 $('mute').addEventListener('click',quiet);$('resume').addEventListener('click',resume);$('quick-mute').addEventListener('click',()=>state.settings.muted_until>Date.now()/1000?resume():quiet());$('quick-alerts').addEventListener('click',()=>navigate('settings'));
 $('enabled').addEventListener('change',e=>action('/api/controls',{enabled:e.target.checked}));$('test').addEventListener('click',()=>action('/api/test-notification',{},'Test notification sent'));$('confidence').addEventListener('input',e=>$('confidence-value').value=e.target.value+'%');$('confidence').addEventListener('change',e=>action('/api/controls',{confidence:Number(e.target.value)/100},'Detection threshold saved'));$('refresh').addEventListener('click',()=>{window.WatchyardLive?.retry();refresh();});document.querySelectorAll('[data-filter]').forEach(b=>b.addEventListener('click',()=>{filter=b.dataset.filter;document.querySelectorAll('[data-filter]').forEach(x=>x.setAttribute('aria-pressed',x===b?'true':'false'));renderEvents(true);}));document.querySelectorAll('[data-nav]').forEach(b=>b.addEventListener('click',()=>navigate(b.dataset.nav)));window.addEventListener('hashchange',()=>{const hash=location.hash.slice(1);if(hash.startsWith('event='))linkedEvent=hash.slice(6);navigate(hash,false);if(linkedEvent&&signedIn)refresh();});document.querySelectorAll('a[href="#home"]').forEach(a=>a.addEventListener('click',e=>{e.preventDefault();navigate('home');}));
-async function enter(){const session=await api('/api/session');if(!session.authenticated){showLogin();return;}signedIn=true;localDevice=session.local;admin=session.device?.role==='admin';applyAccess();$('login-screen').classList.add('hidden');$('app-shell').classList.remove('hidden');$('sign-out').classList.toggle('hidden',localDevice);navigate(location.hash.slice(1)||'home');await refresh();}
-$('login-form').addEventListener('submit',async e=>{e.preventDefault();$('login-button').disabled=true;$('login-error').textContent='';try{await api('/api/login',{code:$('access-code').value,name:$('device-name').value.trim()||'New browser'});$('access-code').value='';await enter();}catch(e){$('login-error').textContent=e.message;}finally{$('login-button').disabled=false;}});$('sign-out').addEventListener('click',async()=>{try{await api('/api/logout',{});showLogin();}catch(e){notice(e.message);}});
+let accountMode = false;
+function loginMode(useAccount) {
+  accountMode = useAccount;
+  $('login-code-fields').classList.toggle('hidden', useAccount);
+  $('login-owner-fields').classList.toggle('hidden', !useAccount);
+  $('login-code-note').classList.toggle('hidden', useAccount);
+  $('access-code').disabled = useAccount;
+  $('login-username').disabled = !useAccount;
+  $('login-password').disabled = !useAccount;
+  $('login-password').value = '';
+  $('login-description').textContent = useAccount ? 'Use your owner account.' : 'Enter your dashboard code or an invitation code.';
+  $('login-mode').textContent = useAccount ? 'Use a dashboard or invitation code' : 'Sign in with your owner account';
+  $('login-error').textContent = '';
+}
+$('login-mode').addEventListener('click', () => loginMode(!accountMode));
+
+async function enter() {
+  const session = await api('/api/session');
+  $('setup-screen').classList.toggle('hidden', !session.setup_required);
+  if (session.setup_required) {
+    $('login-screen').classList.add('hidden');
+    $('setup-form').classList.toggle('hidden', !session.setup_local);
+    $('setup-remote').classList.toggle('hidden', session.setup_local);
+    $('setup-address').textContent = 'http://127.0.0.1:' + (location.port || '8765');
+    return;
+  }
+  $('login-mode').classList.toggle('hidden', !session.account_login);
+  loginMode(session.account_login && !$('access-code').value);
+  if (!session.authenticated) {
+    showLogin();
+    return;
+  }
+  signedIn = true;
+  localDevice = session.local;
+  admin = session.device?.role === 'admin';
+  applyAccess();
+  $('login-screen').classList.add('hidden');
+  $('app-shell').classList.remove('hidden');
+  $('sign-out').classList.toggle('hidden', localDevice);
+  navigate(location.hash.slice(1) || 'home');
+  await refresh();
+}
+
+$('setup-form').addEventListener('submit', async e => {
+  e.preventDefault();
+  const password = $('setup-password');
+  const confirmation = $('setup-confirm');
+  const error = $('setup-error');
+  error.textContent = '';
+  if (password.value !== confirmation.value) {
+    error.textContent = 'The passwords do not match.';
+    confirmation.focus();
+    return;
+  }
+  $('setup-button').disabled = true;
+  try {
+    await api('/api/setup', {username: $('setup-username').value, password: password.value, name: $('device-name').value});
+    e.target.reset();
+    await enter();
+  } catch (errorResponse) {
+    error.textContent = errorResponse.message;
+  } finally {
+    $('setup-button').disabled = false;
+  }
+});
+
+$('login-form').addEventListener('submit', async e => {
+  e.preventDefault();
+  $('login-button').disabled = true;
+  $('login-error').textContent = '';
+  const name = $('device-name').value.trim() || 'New browser';
+  try {
+    if (accountMode) {
+      await api('/api/account/login', {username: $('login-username').value, password: $('login-password').value, name});
+    } else {
+      await api('/api/login', {code: $('access-code').value, name});
+    }
+    $('access-code').value = '';
+    await enter();
+  } catch (error) {
+    $('login-error').textContent = error.message;
+  } finally {
+    $('login-password').value = '';
+    $('login-button').disabled = false;
+  }
+});
+$('sign-out').addEventListener('click', async () => {
+  try {
+    await api('/api/logout', {});
+    await enter();
+  } catch (error) {
+    notice(error.message);
+  }
+});
 const join=location.hash.startsWith('#join=')?location.hash.slice(6):null;if(join){$('access-code').value=decodeURIComponent(join);history.replaceState(null,'',location.pathname);}
 $('device-name').value=/iPhone/.test(navigator.userAgent)?'My iPhone':/iPad/.test(navigator.userAgent)?'My iPad':'My browser';
 enter().catch(()=>{$('login-error').textContent='Cannot connect to Watchyard. Check home Wi-Fi.';showLogin();});setInterval(()=>{if(!document.hidden)refresh();},3000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh();});

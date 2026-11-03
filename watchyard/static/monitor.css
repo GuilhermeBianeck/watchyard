@@ -206,3 +206,20 @@ h1 { font-size: clamp(28px, 3vw, 38px); letter-spacing: -.045em; }
   border-top-color: var(--blue);
   border-top-width: 2px;
 }
+
+/* Owner setup and password sign-in */
+.owner-card { text-align: left; }
+.owner-card > img { margin-bottom: 8px; }
+.owner-card h1 { margin: 8px 0 10px; font-size: 32px; }
+.login-card.owner-card > p { margin: 0; max-width: none; }
+.login-card.owner-card form { margin-top: 24px; }
+.login-card.owner-card input { height: 48px; }
+.login-card .owner-form input {
+  text-align: left;
+  letter-spacing: normal;
+  font-size: 16px;
+}
+#login-owner-fields label[for="login-password"] { margin-top: 12px; }
+.owner-form small { display: block; color: var(--secondary); margin: 6px 0 12px; }
+#setup-error { color: var(--danger, #b42318); }
+#setup-error:empty, #login-error:empty { display: none; }

@@ -1,9 +1,26 @@
-# Devices and Telegram accounts (0.4)
+# Devices and Telegram accounts
 
 An owner can register other browser devices and Telegram accounts in
 Settings → Devices & accounts → Add. Existing dashboard sessions and the original
 Telegram account are preserved with management access during migration. The Mac
 also retains its configured local management access.
+
+## Create the first owner account
+
+On a new installation, open `http://127.0.0.1:8765` on the computer running
+Watchyard. Choose a username and a password of at least 12 characters. Setup
+signs the first browser in as the owner. From another allowed device, use the
+same username and password or open an invitation for that device.
+
+Complete owner setup before pairing Telegram or generating a dashboard code.
+Setup is available once, from the server itself. Installations with a dashboard
+code or device history already have access configured. On installations created
+with an owner account, even the browser on the server signs in with credentials.
+
+Keep the owner password in a password manager. If you lose it, an operator
+with server access can run `scripts/dashboard_code.py` to regain management
+access using a new dashboard code. Restart Watchyard to apply the code and
+invalidate existing browser sessions and invitations. The owner username and password are separate from that code.
 
 ## Register a phone or desktop browser
 
@@ -52,8 +69,7 @@ recalled by revocation.
 
 New invitations default to View only. Permissions are checked on the server;
 management controls are also disabled in the viewer interface. The app does not
-provide public self-registration, email/password accounts or internet dashboard
-access. The existing private-network allowlist still applies. Telegram itself
+provide public self-registration or internet dashboard access. The existing private-network allowlist still applies. Telegram itself
 works over the internet without exposing the dashboard or NVR.
 
 ## Delivery and storage

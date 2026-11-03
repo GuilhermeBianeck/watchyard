@@ -24,6 +24,9 @@ class Members:
           id TEXT PRIMARY KEY, kind TEXT, external_id TEXT, name TEXT, role TEXT,
           created REAL, last_seen REAL, expires REAL, revoked INTEGER DEFAULT 0,
           alerts INTEGER DEFAULT 1,key_version TEXT,UNIQUE(kind,external_id));
+        CREATE TABLE IF NOT EXISTS owner_account (
+          id INTEGER PRIMARY KEY CHECK (id=1), username TEXT NOT NULL,
+          salt BLOB NOT NULL, password_hash BLOB NOT NULL);
         CREATE TABLE IF NOT EXISTS invitations (
           id TEXT PRIMARY KEY,digest TEXT UNIQUE,kind TEXT,name TEXT,role TEXT,
           expires REAL,status TEXT DEFAULT 'active',key_version TEXT);
@@ -47,6 +50,33 @@ class Members:
             self.db.execute('INSERT OR IGNORE INTO devices (id,kind,external_id,name,role,created,last_seen,expires,key_version) VALUES (?,?,?,?,?,?,?,?,?)',(uuid.uuid4().hex,kind,str(external_id),name,role,now,now,expires,self.key_version))
             self.db.commit()
             return self.find(kind,external_id)
+
+    def owner_account(self):
+        with self.lock:
+            return self.db.execute('SELECT username,salt,password_hash FROM owner_account').fetchone()
+
+    def setup_required(self):
+        with self.lock:
+            return (
+                not self.settings.secret('DASHBOARD_CODE_HASH')
+                and self.settings.secret('TELEGRAM_CHAT_ID') is None
+                and not self.db.execute('SELECT 1 FROM owner_account').fetchone()
+                and not self.db.execute('SELECT 1 FROM devices LIMIT 1').fetchone()
+            )
+
+    def create_owner(self, username, salt, password_hash, digest, name, expiry):
+        with self.lock, self.db:
+            self.db.execute('BEGIN IMMEDIATE')
+            if not self.setup_required():
+                return False
+            self.db.execute('INSERT INTO owner_account VALUES (1,?,?,?)', (username,salt,password_hash))
+            now = time.time()
+            self.db.execute(
+                'INSERT INTO devices (id,kind,external_id,name,role,created,last_seen,expires,key_version) '
+                "VALUES (?,'browser',?,?,'admin',?,?,?,?)",
+                (uuid.uuid4().hex,digest,name,now,now,expiry,self.key_version),
+            )
+            return True
 
     def find(self,kind,external_id):
         with self.lock:

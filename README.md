@@ -5,7 +5,7 @@ Watchyard adds local object detection, live viewing, and useful alerts to the ca
 - **Live:** Watch on iPhone, Android, or desktop at up to 720p and 10 fps. Analysis runs independently at 1 or 2 fps per camera. Boxes stay visible through short gaps in recognition. Shared ingest can let live video and analysis use one decoder while a camera is watched.
 - **Activity:** Review events, export metadata, and watch, save, or download clips from a supported recorder. Related events can appear together across camera views.
 - **Alerts:** Set zones, schedules, and sound preferences per camera. Use Telegram, optional Pushover, a signed webhook for your own app, or local history alone.
-- **Access:** Invite household members to the dashboard or Telegram with one-use links. Choose view-only or management access and revoke devices individually.
+- **Access:** Create the first owner account from the dashboard. Invite household members to the dashboard or Telegram with one-use links. Choose view-only or management access and revoke devices individually.
 
 The core application is deployed in a local field pilot. See the [roadmap](docs/roadmap.md) for the current release, verification status and priorities.
 
@@ -17,12 +17,11 @@ Use an Apple Silicon Mac with Python 3.11, Node.js 18 or later, FFmpeg, and netw
 python3.11 -m venv .venv
 .venv/bin/python -m pip install '.[test]'
 .venv/bin/python scripts/configure.py
-.venv/bin/python scripts/dashboard_code.py
 .venv/bin/python scripts/prepare_model.py
 .venv/bin/python scripts/install_service.py
 ```
 
-Open `http://127.0.0.1:8765` on the Mac, or `http://<Mac-IP>:8765` on the same Wi-Fi. Use the dashboard code or an invitation. In iPhone Safari, choose **Share → Add to Home Screen** for quick access. Keep the Mac logged in and awake; the service starts after login. Use `sh scripts/service.sh status` to inspect it and `restart`, `stop`, or `start` to manage it.
+On a fresh install, open `http://127.0.0.1:8765` on the Mac and create your owner account before pairing Telegram. Then use your username and password from other devices at `http://<Mac-IP>:8765` on the same Wi-Fi. Existing installations can keep using their dashboard code or invitations. In iPhone Safari, choose **Share → Add to Home Screen** for quick access. Keep the Mac logged in and awake; the service starts after login. Use `sh scripts/service.sh status` to inspect it and `restart`, `stop`, or `start` to manage it.
 
 The service stores configuration, events, clips, models, and logs under `~/Library/Application Support/Watchyard` by default. Set `WATCHYARD_DATA` to override the data directory consistently for setup and runtime. Keep credentials in its private `secrets.json`. Use only trusted home Wi-Fi for plain HTTP; use a private VPN for remote access and do not expose the dashboard or RTSP ports publicly.
 

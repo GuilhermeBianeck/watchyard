@@ -146,6 +146,18 @@ class Service:
                 return False
         return True
 
+    def watchdog_ready(self):
+        if self.detector in ('loading', 'unavailable') or self.detector_error:
+            return False
+        now = time.time()
+        online = [
+            self.cameras[config['id']] for config in self.settings.snapshot()['cameras']
+            if config['enabled'] and now - self.cameras[config['id']].captured_at < 12
+        ]
+        return not online or any(
+            not camera.analysis_error and now - camera.detected_at < 45 for camera in online
+        )
+
     def record(self, camera, frame, event, config, *, first_seen=None, last_seen=None):
         image = frame.copy()
         draw_detection(image,event)

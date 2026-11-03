@@ -48,8 +48,11 @@ class Access:
     def digest(self, value):
         return hmac.new(self.key, value.encode(), hashlib.sha256).hexdigest()
 
+    def local_admin(self, client):
+        return self.runtime.local_bypass and self.local(client) and self.members.owner_account() is None
+
     def principal(self, request):
-        if self.runtime.local_bypass and self.local(request.client.host):
+        if self.local_admin(request.client.host):
             return {'id':'local','name':'This Mac','role':'admin','kind':'browser'}
         token = request.cookies.get(self.cookie,'')
         try:
@@ -67,22 +70,61 @@ class Access:
         self.members.touch(device)
         return {k:device[k] for k in ('id','name','role','kind')}
 
-    def authenticated(self, request):
-        return self.principal(request) is not None
+    def _rate_limited(self, client, now):
+        self.attempts = {
+            key: [stamp for stamp in stamps if now-stamp < 300]
+            for key, stamps in self.attempts.items() if stamps and now-stamps[-1] < 300
+        }
+        return len(self.attempts.get(client, [])) >= 5 or sum(map(len, self.attempts.values())) >= 30
+
+    def _session(self, now):
+        expiry = int(now + 30*86400)
+        value = str(expiry) + '.d_' + secrets.token_hex(16)
+        token = value + '.' + self.digest(value)
+        return token, self.digest(token), expiry
+
+    @staticmethod
+    def _password_hash(password, salt):
+        return hashlib.scrypt(password.encode(), salt=salt, n=2**16, r=8, p=2,
+                              maxmem=96*1024**2, dklen=32)
+
+    def setup(self, username, password, client, name):
+        if not self.local(client):
+            return None, 403
+        with self.lock:
+            if not self.members.setup_required():
+                return None, 409
+            salt = secrets.token_bytes(16)
+            password_hash = self._password_hash(password, salt)
+            token, digest, expiry = self._session(time.time())
+            if not self.members.create_owner(username.lower(), salt, password_hash, digest, name, expiry):
+                return None, 409
+            return token, 200
+
+    def login_owner(self, username, password, client, name):
+        with self.lock:
+            now = time.time()
+            if self._rate_limited(client, now):
+                return None, 429
+            account = self.members.owner_account()
+            if account:
+                password_hash = self._password_hash(password, account['salt'])
+                if hmac.compare_digest(password_hash, account['password_hash']) and username.lower() == account['username']:
+                    token, digest, expiry = self._session(now)
+                    self.members.register('browser', digest, name, 'admin', expiry)
+                    self.attempts.pop(client, None)
+                    return token, 200
+            self.attempts.setdefault(client, []).append(now)
+            return None, 401
 
     def login(self, code, client, name="New browser"):
         now = time.time()
         with self.lock:
-            # Bound memory and limit attempts by client plus a global limit.
-            self.attempts = {k:[t for t in v if now-t<300] for k,v in self.attempts.items() if v and now-v[-1]<300}
-            if len(self.attempts.get(client, [])) >= 5 or sum(map(len,self.attempts.values())) >= 30:
+            if self._rate_limited(client, now):
                 return None, 429
             expected = self.settings.secret('DASHBOARD_CODE_HASH', '')
             owner = bool(expected and hmac.compare_digest(self.digest(code),expected))
-        expiry=int(now+30*86400)
-        value=str(expiry)+'.d_'+secrets.token_hex(16)
-        token=value+'.'+self.digest(value)
-        digest=self.digest(token)
+        token, digest, expiry = self._session(now)
         if owner:
             self.members.register('browser',digest,name,'admin',expiry)
         elif not self.members.accept(code,'browser',digest,expiry,client='browser:'+client):

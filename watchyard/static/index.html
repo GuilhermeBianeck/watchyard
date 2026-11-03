@@ -22,8 +22,53 @@
 <symbol id="i-wifi" viewBox="0 0 24 24"><path d="M2 8a16 16 0 0 1 20 0M6 12a10 10 0 0 1 12 0m-8 4a4 4 0 0 1 4 0"/><circle cx="12" cy="20" r=".6"/></symbol>
 <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 15A9 9 0 0 1 9 4a9 9 0 1 0 11 11Z"/></symbol>
 </defs></svg>
-<section id="login-screen" class="login-screen hidden" aria-label="Dashboard sign in">
- <div class="login-card"><img src="/static/icon.svg" width="76" height="76" alt=""><h1>Sign in to Watchyard</h1><p>Enter your dashboard code or an invitation code.</p><form id="login-form"><label for="access-code">Dashboard code</label><input id="access-code" name="code" type="password" inputmode="text" minlength="1" maxlength="64" autocomplete="one-time-code" placeholder="Access or invitation code" required><label for="device-name" class="device-name-label">Name this device</label><input id="device-name" name="device_name" type="text" maxlength="60" autocomplete="off" placeholder="e.g. My iPhone"><button class="primary wide" id="login-button">Sign in</button><p id="login-error" role="alert"></p></form><p class="login-note">Use your owner code or a one-time invitation. Invited devices can view cameras on the allowed private network.</p></div>
+<section id="setup-screen" class="login-screen hidden" aria-labelledby="setup-title">
+ <div class="login-card owner-card">
+  <img src="/static/icon.svg" width="52" height="52" alt="">
+  <h1 id="setup-title">Set up Watchyard</h1>
+  <p>Create the owner account for your cameras. You can invite other people from Settings once you’re signed in.</p>
+  <form id="setup-form" class="owner-form" method="post">
+   <label for="setup-username">Username</label>
+   <input id="setup-username" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" minlength="3" maxlength="32" pattern="[A-Za-z0-9][A-Za-z0-9_.\-]{2,31}" required aria-describedby="setup-username-hint">
+   <small id="setup-username-hint">Use 3–32 characters. Letters, numbers, periods, underscores and hyphens are allowed.</small>
+   <label for="setup-password">Password</label>
+   <input id="setup-password" name="password" type="password" autocomplete="new-password" minlength="12" maxlength="128" required aria-describedby="setup-password-hint">
+   <small id="setup-password-hint">Use at least 12 characters.</small>
+   <label for="setup-confirm">Confirm password</label>
+   <input id="setup-confirm" type="password" autocomplete="new-password" minlength="12" maxlength="128" required>
+   <button class="primary wide" id="setup-button">Create owner account</button>
+   <p id="setup-error" role="alert"></p>
+  </form>
+  <div id="setup-remote" class="hidden">
+   <p>On the computer running Watchyard, open <strong id="setup-address"></strong> to create the owner account.</p>
+   <a class="text-button" href="/">Reload after setup</a>
+  </div>
+ </div>
+</section>
+<section id="login-screen" class="login-screen hidden" aria-labelledby="login-title">
+ <div class="login-card">
+  <img src="/static/icon.svg" width="76" height="76" alt="">
+  <h1 id="login-title">Sign in to Watchyard</h1>
+  <p id="login-description">Enter your dashboard code or an invitation code.</p>
+  <form id="login-form" method="post">
+   <div id="login-code-fields">
+    <label for="access-code">Dashboard code</label>
+    <input id="access-code" name="code" type="password" inputmode="text" minlength="1" maxlength="64" autocomplete="one-time-code" placeholder="Access or invitation code" required>
+   </div>
+   <div id="login-owner-fields" class="owner-form hidden">
+    <label for="login-username">Username</label>
+    <input id="login-username" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="32" required disabled>
+    <label for="login-password">Password</label>
+    <input id="login-password" name="password" type="password" autocomplete="current-password" maxlength="128" required disabled>
+   </div>
+   <label for="device-name" class="device-name-label">Name this device</label>
+   <input id="device-name" name="device_name" type="text" maxlength="60" autocomplete="off" placeholder="e.g. My iPhone">
+   <button class="primary wide" id="login-button">Sign in</button>
+   <p id="login-error" role="alert"></p>
+  </form>
+  <button id="login-mode" class="text-button hidden" type="button">Use a dashboard or invitation code</button>
+  <p id="login-code-note" class="login-note">Use your owner code or a one-time invitation. Invited devices can view cameras on the allowed private network.</p>
+ </div>
 </section>
 <div id="app-shell" class="app-shell hidden">
  <div class="content-shell"><header class="topbar">
@@ -75,7 +120,7 @@
    <h2 class="group-heading">Telegram</h2><div class="settings-group"><div class="settings-row"><span class="row-text">Your camera bot<small id="telegram-status">Checking connection</small></span><span id="telegram-dot" class="dot"></span></div><a class="settings-row row-button" id="open-telegram" hidden target="_blank" rel="noopener noreferrer"><span>Open in Telegram</span><span class="chevron">↗</span></a></div>
    <h2 class="group-heading">Detection</h2><div class="settings-group"><label class="settings-row"><span class="row-text">Analysis rate<small>Live stays smooth. Brief movement can be missed at 1 fps.</small></span><select id="analysis-rate" aria-label="Analysis rate"><option value="1">1 fps · lower load</option><option value="2">2 fps · faster response</option></select></label><div class="slider-row"><label for="confidence">Detection threshold <output id="confidence-value">55%</output></label><input id="confidence" type="range" min="25" max="95" step="5" value="55"><p>Higher values reduce uncertain detections, but may miss objects.</p></div><div class="settings-row"><span>Model</span><span id="detector" class="row-value">Starting</span></div><div class="settings-row"><span>Memory</span><span id="memory" class="row-value">—</span></div></div>
    <h2 class="group-heading">Reliability</h2><div class="settings-group"><div class="settings-row"><span>Waiting to send</span><span id="queue-count" class="row-value">—</span></div><div class="settings-row"><span>Telegram repeats skipped in 24 hours</span><span id="telegram-suppressed" class="row-value">—</span></div><div class="settings-row"><span>Average alert delay</span><span id="delivery-delay" class="row-value">Collecting</span></div><div class="settings-row"><span>Service watchdog</span><span id="watchdog-status" class="row-value">Starting</span></div><div class="settings-row"><span>Peak memory today</span><span id="peak-memory" class="row-value">Collecting</span></div><div class="settings-row"><span>Reviewed alerts</span><span id="review-summary" class="row-value">None yet</span></div><p id="delivery-problem" class="settings-note"></p><div id="health-history"></div></div><p class="settings-note">The watchdog runs on the same server. A full host outage needs a monitor on another device.</p>
-   <h2 class="group-heading">This home</h2><div class="settings-group"><div class="settings-row"><span class="row-icon green"><svg><use href="#i-wifi"/></svg></span><span class="row-text">Home Wi-Fi access<small>Available on your allowed private network.</small></span></div><div class="settings-row"><span>Appearance</span><span class="row-value">Follows your device</span></div><button id="sign-out" class="settings-row row-button hidden"><span>Sign out of this device</span></button></div><p class="settings-note">Analysis and history are stored on your server. Enabled providers receive alert data. Telegram sends snapshots; Pushover only attaches them if configured.</p><p class="version">Watchyard 0.8.8</p>
+   <h2 class="group-heading">This home</h2><div class="settings-group"><div class="settings-row"><span class="row-icon green"><svg><use href="#i-wifi"/></svg></span><span class="row-text">Home Wi-Fi access<small>Available on your allowed private network.</small></span></div><div class="settings-row"><span>Appearance</span><span class="row-value">Follows your device</span></div><button id="sign-out" class="settings-row row-button hidden"><span>Sign out of this device</span></button></div><p class="settings-note">Analysis and history are stored on your server. Enabled providers receive alert data. Telegram sends snapshots; Pushover only attaches them if configured.</p><p class="version">Watchyard 0.8.9</p>
   </section>
  </main></div>
  <nav class="tabbar" aria-label="Main navigation"><button data-nav="home" aria-current="page"><svg><use href="#i-camera"/></svg><span>Cameras</span></button><button data-nav="activity"><svg><use href="#i-activity"/></svg><span>Activity</span></button><button data-nav="settings"><svg><use href="#i-settings"/></svg><span>Settings</span></button></nav>

@@ -14,6 +14,9 @@ def check_service(session):
         health_only=os.environ.get('WATCHYARD_WATCHDOG_HEALTH_ONLY')=='1'
         url='http://127.0.0.1:8765/'+('healthz' if health_only else 'api/status')
         response=session.get(url,timeout=5)
+        if not health_only and getattr(response,'status_code',None) == 401:
+            response = session.get('http://127.0.0.1:8765/healthz/watchdog',timeout=5)
+            health_only = True
         response.raise_for_status()
         if health_only:
             return response.text.strip()=='ready'
