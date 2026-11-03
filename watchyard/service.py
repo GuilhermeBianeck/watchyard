@@ -9,7 +9,7 @@ import psutil
 
 from . import __version__
 from .capture import Camera, draw_detection
-from .rules import Tracker
+from .rules import Tracker, ignored_box
 from .store import Store
 from .telegram import Telegram
 from .notifications import Notifications
@@ -99,7 +99,10 @@ class Service:
                         if label not in c['labels']:
                             continue
                         coords = box.xyxy[0].cpu().tolist()
-                        detections.append({'label':label,'confidence':float(box.conf[0]),'box':[max(0,min(1,v/(w if i%2==0 else h))) for i,v in enumerate(coords)]})
+                        bounds = [max(0, min(1, v / (w if i % 2 == 0 else h)))
+                                  for i, v in enumerate(coords)]
+                        if not ignored_box(label, bounds, c):
+                            detections.append({'label': label, 'confidence': float(box.conf[0]), 'box': bounds})
                     camera.publish_detections(detections, sequence)
                     camera.analysed_frames += 1
                     camera.inference_ms = round((time.perf_counter()-start)*1000,1)

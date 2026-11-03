@@ -96,3 +96,14 @@ def test_return_after_gap_can_alert_again():
     for now in range(6, 9):
         events = tracker.update([detection(x=.48)], now, [])
     assert len(events) == 1
+
+
+def test_ignore_box_matches_only_its_label_location_and_size():
+    from watchyard.rules import ignored_box
+
+    camera = {'ignore_boxes': {'person': [[.87, .12, .95, .41]]}}
+    assert ignored_box('person', [.88, .13, .94, .40], camera)
+    assert not ignored_box('cat', [.88, .13, .94, .40], camera)
+    assert not ignored_box('person', [.70, .13, .76, .40], camera)
+    assert not ignored_box('person', [.88, .22, .91, .32], camera)
+    assert not ignored_box('person', [.88, .13, .94, .40], {})

@@ -8,7 +8,8 @@ def validate_inventory(cameras):
     seen = set()
     for camera in cameras:
         if not isinstance(camera, dict) or set(camera) - {
-            'id', 'name', 'enabled', 'zone', 'labels', 'alert_modes', 'schedule', 'channel', 'replay_track'
+            'id', 'name', 'enabled', 'zone', 'labels', 'alert_modes', 'schedule', 'channel', 'replay_track',
+            'ignore_boxes'
         }:
             raise ValueError('Unknown camera fields; keep stream URLs in secrets.json')
         camera_id = camera.get('id')
@@ -21,6 +22,17 @@ def validate_inventory(cameras):
             value = camera.get(key)
             if value is not None and (type(value) is not int or value < 1):
                 raise ValueError(f'{key} must be a positive integer')
+        ignored = camera.get('ignore_boxes', {})
+        if not isinstance(ignored, dict):
+            raise ValueError('ignore_boxes must map object labels to lists of rectangles')
+        for label, boxes in ignored.items():
+            if label not in ('person', 'car', 'dog', 'cat') or not isinstance(boxes, list):
+                raise ValueError('Invalid ignore_boxes label or rectangle list')
+            for box in boxes:
+                if (not isinstance(box, list) or len(box) != 4
+                        or any(type(v) not in (int, float) or not 0 <= v <= 1 for v in box)
+                        or box[0] >= box[2] or box[1] >= box[3]):
+                    raise ValueError('Ignore boxes need four ordered coordinates between 0 and 1')
         camera.setdefault('enabled', True)
         camera.setdefault('zone', [])
         camera.setdefault('labels', ['person', 'car', 'dog', 'cat'])

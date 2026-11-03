@@ -29,6 +29,12 @@ def iou(a, b):
     return intersection/union if union else 0
 
 
+def ignored_box(label, box, camera):
+    """Ignore a recurring false detection only at a matching location and size."""
+    return any(iou(box, reference) >= 0.55
+               for reference in camera.get('ignore_boxes', {}).get(label, ()))
+
+
 def family(label):
     return "animal" if label in ("cat", "dog") else label
 

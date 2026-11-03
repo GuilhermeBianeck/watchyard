@@ -75,3 +75,11 @@ Health and manual test payloads use `kind: "health"` or `"test"` and omit `event
 Return 2xx after accepting the event. Watchyard does not follow redirects. Failed deliveries retry independently; another provider's successful delivery is not retried. Event delivery expires after three minutes. A timeout after a receiver accepted the request can cause a duplicate, so the receiver should keep its deduplication keys beyond the retry window.
 
 Use the dashboard's test button to send a text-only test to all ready destinations. Provider status indicates that the server has configuration; a successful test confirms provider acceptance, not receipt on a device.
+
+For recurring false detections at a fixed spot, a camera entry can include
+`"ignore_boxes": {"person": [[0.87, 0.12, 0.95, 0.41]]}`. Coordinates are
+normalized left, top, right and bottom. Watchyard ignores a detection of that
+label when its box overlaps the reference with an intersection over union of
+at least 55%. This affects both alerts and overlays. Keep these boxes tight and
+remove them if the camera moves or the scene changes. A real object of the same
+label with a matching box would also be ignored.
