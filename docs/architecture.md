@@ -20,3 +20,11 @@ are kind-bound, expire after 15 minutes and are accepted atomically once. The
 watchdog and detector use the same membership registry and track delivery per
 recipient to avoid resending accepted alerts when another account fails. See
 devices-and-accounts.md for enrollment, permissions and backup requirements.
+
+Version 0.5 adds an independent, serial replay worker and `clips.db`. An explicit
+request copies alert metadata into a durable job, checks the NVR clock/search
+results and fetches a bounded RTSP playback range. FFmpeg makes an H.264 MP4 and
+poster in private `clips/`; the API serves authenticated byte ranges and downloads.
+Kept clips survive event retention and cache eviction. The detector and Telegram
+delivery loops do not wait for replay conversion. See replay-and-clips.md for
+the tested recorder, resource limits and storage semantics.

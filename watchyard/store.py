@@ -39,6 +39,11 @@ class Store:
         with self.lock:
             return [dict(r) for r in self.db.execute('SELECT * FROM events ORDER BY created DESC LIMIT ?',(limit,))]
 
+    def event(self,key):
+        with self.lock:
+            row=self.db.execute('SELECT * FROM events WHERE id=?',(key,)).fetchone()
+        return dict(row) if row else None
+
     def pending(self):
         with self.lock:
             return [dict(r) for r in self.db.execute("SELECT * FROM events WHERE status='pending' AND next_try<=? ORDER BY created LIMIT 4",(time.time(),))]

@@ -7,6 +7,7 @@ import time
 import csv
 import io
 import json
+import re
 from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -20,6 +21,7 @@ from .config import Settings
 from .service import Service
 from .access import Access, lan_address, lan_network
 from .runtime import Runtime
+from .replay import ReplayError
 
 STATIC = Path(__file__).parent/'static'
 
@@ -92,6 +94,10 @@ class Invitation(BaseModel):
         return value
 
 
+class KeepClip(BaseModel):
+    saved: bool
+
+
 def create_app(service=None, run_service=True):
     service = service or Service(Settings())
     access = Access(service.settings)
@@ -112,7 +118,7 @@ def create_app(service=None, run_service=True):
         if run_service:
             service.close()
 
-    app = FastAPI(title='Watchyard',version='0.4.0',lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
+    app = FastAPI(title='Watchyard',version='0.5.0',lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
     app.state.service = service
     app.add_middleware(TrustedHostMiddleware,allowed_hosts=list(runtime.allowed_hosts) if runtime.allowed_hosts else ['localhost','127.0.0.1','testserver',address,hostname,hostname.split('.')[0]+'.local',bonjour])
 
@@ -130,7 +136,8 @@ def create_app(service=None, run_service=True):
         if request.url.path.startswith('/api/') and request.url.path not in ('/api/session','/api/login'):
             if not principal:
                 return JSONResponse({'detail':'Sign in with your dashboard code'},status_code=401)
-            administrative=request.url.path.startswith(('/api/devices','/api/invitations')) or (request.method not in ('GET','HEAD','OPTIONS') and request.url.path!='/api/logout')
+            replay_request=request.method=='POST' and re.fullmatch(r'/api/events/[0-9a-f]{32}/replay',request.url.path)
+            administrative=request.url.path.startswith(('/api/devices','/api/invitations')) or (request.method not in ('GET','HEAD','OPTIONS') and request.url.path!='/api/logout' and not replay_request)
             if administrative and principal['role']!='admin':
                 return JSONResponse({'detail':'This device has view-only access'},status_code=403)
         if request.method not in ('GET','HEAD','OPTIONS'):
@@ -226,6 +233,50 @@ def create_app(service=None, run_service=True):
         writer.writeheader()
         writer.writerows(service.store.recent(5000))
         return Response(stream.getvalue(),media_type='text/csv',headers={'Content-Disposition':'attachment; filename="watchyard-events.csv"'})
+
+    @app.post('/api/events/{event_id}/replay')
+    def request_replay(event_id:str):
+        event=service.store.event(event_id)
+        if event is None:raise HTTPException(404,'This alert is no longer in history. Kept clips remain in Activity.')
+        try:return service.clips.public(service.clips.request(event))
+        except ReplayError as exc:raise HTTPException(409,str(exc)) from None
+
+    @app.get('/api/clips/saved')
+    def saved_clips():
+        return service.clips.saved()
+
+    def find_clip(clip_id):
+        clip=service.clips.get(clip_id)
+        if clip is None:raise HTTPException(404,'Replay not found')
+        return clip
+
+    @app.get('/api/clips/{clip_id}')
+    def clip_status(clip_id:str):
+        return service.clips.public(find_clip(clip_id))
+
+    @app.post('/api/clips/{clip_id}/keep')
+    def keep_clip(clip_id:str,data:KeepClip):
+        find_clip(clip_id)
+        try:return service.clips.public(service.clips.keep(clip_id,data.saved))
+        except ReplayError as exc:raise HTTPException(409,str(exc)) from None
+
+    @app.api_route('/api/clips/{clip_id}/video',methods=['GET','HEAD'])
+    def clip_video(clip_id:str,download:bool=False):
+        clip=find_clip(clip_id)
+        path=service.clips.path(clip_id)
+        if clip['state']!='ready' or not path.is_file():raise HTTPException(409,'Prepare the replay before playing it.')
+        service.clips.touch(clip_id)
+        from .replay import utc_text
+        filename=f"Watchyard-camera-{clip['camera']}-{utc_text(clip['event_created'],True)}.mp4"
+        return FileResponse(path,media_type='video/mp4',filename=filename,
+                            content_disposition_type='attachment' if download else 'inline')
+
+    @app.api_route('/api/clips/{clip_id}/poster',methods=['GET','HEAD'])
+    def clip_poster(clip_id:str):
+        clip=find_clip(clip_id)
+        path=service.clips.path(clip_id,True)
+        if clip['state']!='ready' or not path.is_file():raise HTTPException(404)
+        return FileResponse(path,media_type='image/jpeg')
 
     @app.post('/api/events/{event_id}/feedback')
     def feedback(event_id:str,data:Feedback):

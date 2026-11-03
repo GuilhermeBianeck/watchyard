@@ -13,6 +13,7 @@ from .store import Store
 from .telegram import Telegram
 from .policy import decision
 from .runtime import Runtime
+from .replay import Clips
 
 log = logging.getLogger('watchyard')
 
@@ -23,6 +24,7 @@ class Service:
         self.runtime = Runtime.read()
         self.stop = threading.Event()
         self.store = Store(settings.path)
+        self.clips = Clips(settings,self.stop)
         self.cameras = {i:Camera(i,settings,self.stop) for i in range(1,5)}
         self.trackers = {i:Tracker() for i in self.cameras}
         self.telegram = Telegram(settings,self)
@@ -34,6 +36,7 @@ class Service:
         self.monitor_thread = None
 
     def start(self):
+        self.clips.start()
         for camera in self.cameras.values():
             camera.start()
         self.telegram.start()
@@ -133,7 +136,7 @@ class Service:
         for child in children:
             try: ram += child.memory_info().rss
             except psutil.Error: pass
-        return {'version':'0.4.0','started':self.started,'detector':self.detector,'detector_error':self.detector_error,'cameras':cameras,'settings':config,'telegram':{'paired':self.telegram.paired(),'accounts':len(self.telegram.members.recipients()),'username':self.telegram.username,'error':self.telegram.last_error,'last_success':self.telegram.last_success,'last_send_at':self.telegram.last_send_at,'delivery_error':self.telegram.last_delivery_error,'poll_error':self.telegram.last_poll_error},'memory_mb':round(ram/1024**2),'system_memory_percent':psutil.virtual_memory().percent}
+        return {'version':'0.5.0','started':self.started,'detector':self.detector,'detector_error':self.detector_error,'cameras':cameras,'settings':config,'telegram':{'paired':self.telegram.paired(),'accounts':len(self.telegram.members.recipients()),'username':self.telegram.username,'error':self.telegram.last_error,'last_success':self.telegram.last_success,'last_send_at':self.telegram.last_send_at,'delivery_error':self.telegram.last_delivery_error,'poll_error':self.telegram.last_poll_error},'memory_mb':round(ram/1024**2),'system_memory_percent':psutil.virtual_memory().percent}
 
     def status_text(self):
         status = self.status()
@@ -150,6 +153,7 @@ class Service:
             now = time.time()
             if now-last_cleanup > 3600:
                 self.store.cleanup(self.settings.snapshot()['retention_days'])
+                self.clips.cleanup()
                 last_cleanup = now
             if now-last_sample >= 60:
                 self.store.sample(self.status())
@@ -161,5 +165,6 @@ class Service:
 
     def close(self):
         self.stop.set()
+        self.clips.close()
         for camera in self.cameras.values():
             camera.close()

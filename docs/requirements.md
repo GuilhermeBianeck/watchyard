@@ -18,6 +18,8 @@ Reduce irrelevant motion notifications from four locally connected NVR cameras w
 11. Start at user login, recover from process failure, and expose a truthful health endpoint.
 12. Keep credentials and images outside Git; serve the dashboard on the home network with device sign-in; keep Python on loopback and reject foreign Host, Origin and subnet access.
 13. Register named phone/desktop browser sessions with view-only or management access, preserve existing owner access, and revoke sessions/accounts immediately. Sign-out revokes the browser session on the server. Invitations are one-use, expire in 15 minutes and store only a keyed hash.
+14. Retrieve a bounded replay around a retained alert from the recorder, prepare a mobile-compatible video, and allow authenticated playback and download. Keep detection independent of the replay worker; limit concurrent conversions, queued work, runtime, output size and disk use.
+15. Allow management devices to keep clips beyond event/cache retention and remove them from Saved. Preserve copied event metadata and posters with kept clips. Report missing recordings, clock differences, recording gaps and preparation failures truthfully.
 
 ## Acceptance and boundaries
 

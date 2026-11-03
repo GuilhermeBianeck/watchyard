@@ -135,7 +135,8 @@ for complete host-outage reporting.
 
 - Prepare the VPN and CPU model before stopping the Mac installation.
 - Back up event history (`events.db`), registered devices/accounts
-  (`members.db`), event JPEGs and settings. Stop all Mac services with
+  (`members.db`), replay jobs (`clips.db`), kept/cached clips (`clips/`), event JPEGs
+  and settings. Stop all Mac services with
   `sh scripts/service.sh stop` for a consistent final copy. Copy the data securely
   (for SQLite, stop writers or use SQLite backup; do not copy a live database
   without its WAL). Exclude runtime, logs and macOS model packages.

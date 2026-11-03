@@ -17,12 +17,26 @@ As a homeowner, I want to know when a person, moving vehicle or animal enters a 
 ## M3: Reliability and control — partly implemented in 0.3
 - Implemented: durable offline/recovery queue, independent same-Mac service watchdog and delivery diagnostics. A heartbeat outside the Mac remains planned.
 - Implemented: notification severity by camera/object, weekday and overnight schedules. Tracking and cross-camera re-identification remain future work.
-- Home Wi-Fi dashboard access and iPhone layout: implemented in 0.2, with authenticated sessions. Internet/VPN access and short event clips remain planned.
+- Home Wi-Fi dashboard access and iPhone layout: implemented in 0.2, with authenticated sessions. Short event replays are implemented in 0.5. Internet/VPN access remains separate work.
 - Acceptance: recovery and outage scenarios pass documented end-to-end checks without exposing the NVR.
 
 ## M4: Optional enhancements — planned
 - Evaluate a local vision-language model for optional event descriptions; never silently suppress a person alert based on an unvalidated model.
 - Explore additional classes and tailored models if field evidence warrants them.
+
+## M5: Alert → replay → save — implemented in 0.5
+
+As a homeowner, I can open an alert, watch footage around its timestamp and keep
+or download a clip so that I can understand what happened without switching apps.
+
+- Search the NVR and prepare one mobile-compatible replay at a time.
+- Show recording/preparation states, unavailable footage, gaps and clock errors.
+- Offer download to approved viewers and a kept-clip library managed by owners.
+- Preserve kept clips after normal event history and preview-cache cleanup.
+- Acceptance: real recorder retrieval, browser playback/seeking, download byte
+  ranges, authorization, retention and concurrent detector health are verified.
+- Calendar playback, disk/recording health and original-quality exports remain
+  follow-on work rather than acceptance requirements for this milestone.
 
 ## Multi-device and account access — implemented in 0.4
 

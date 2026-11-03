@@ -82,3 +82,12 @@ access, and manage individual Telegram alert subscriptions. See
 [devices and accounts](docs/devices-and-accounts.md). Existing owner access is
 preserved. Telegram account registration applies to all Telegram clients logged
 into that account; dashboard access remains on the allowed private network.
+
+## Alert replay and saved clips (0.5)
+
+Open an alert and choose **Watch replay** to retrieve the recording around it
+from the NVR. Download the mobile MP4 or, with management access, choose **Keep
+clip** to preserve it under Activity → Saved clips. New Telegram alerts link to
+the authenticated replay page on home Wi-Fi. Clips are prepared one at a time;
+continuous recording remains on the NVR. See [replay and clips](docs/replay-and-clips.md)
+for quality, retention, storage limits and recorder requirements.

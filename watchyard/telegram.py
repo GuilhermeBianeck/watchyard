@@ -70,6 +70,15 @@ class Telegram:
         results=[]
         for target in self._targets(chat_id):
             keyboard={'inline_keyboard':[[{'text':'Status','callback_data':'status'},{'text':'Pause my alerts','callback_data':'notifications:off'}]]}
+            if event_id:
+                from .access import lan_address
+                from .runtime import Runtime,boolean
+                runtime=Runtime.read()
+                hosts=[h for h in runtime.allowed_hosts if h not in ('localhost','127.0.0.1','testserver')]
+                host=hosts[0] if hosts else lan_address()
+                if ':' in host:host='['+host+']'
+                port=8765 if boolean('WATCHYARD_GATEWAY',False) else runtime.port
+                keyboard['inline_keyboard'].append([{'text':'Replay on home Wi-Fi','url':f'http://{host}:{port}/#event={event_id}'}])
             if target['role']=='admin':
                 keyboard['inline_keyboard'][0].append({'text':'Mute home 1 hour','callback_data':'mute:60'})
                 if event_id:keyboard['inline_keyboard'].append([{'text':'Useful alert','callback_data':'review:useful:'+event_id},{'text':'False alarm','callback_data':'review:false_alarm:'+event_id}])

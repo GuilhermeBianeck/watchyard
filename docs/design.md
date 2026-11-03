@@ -20,3 +20,13 @@ identity. Previews are labelled as periodically refreshed pictures, not live
 video. Expanded camera views continue refreshing. Touch areas are at least
 44px for primary controls, safe areas are respected, and motion is reduced when
 requested. Sign-in does not disclose camera names or images before pairing.
+
+Replay extends this layout with an event action and a native video sheet. Keep
+the existing six color tokens and system type; camera footage is the focus.
+The sheet reads from place/date to footage, preparation status and the two
+actions: Download and Keep clip. Activity has a Saved clips shelf below its
+event list. Left-aligned copy and full-width mobile media preserve the familiar
+iOS layout. A separate dashboard of playback statistics or a fourth navigation
+tab would add weight without helping this task, so the existing three tabs stay.
+Loading, unavailable recordings, shorter clips and storage limits have explicit
+states. Preparation never claims a made-up percentage.
