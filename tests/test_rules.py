@@ -63,3 +63,36 @@ def test_polygon():
     assert inside((.5,.5),[])
     assert inside((.5,.5),[[0,0],[1,0],[1,1],[0,1]])
     assert not inside((.1,.1),[[.3,.3],[.8,.3],[.8,.8],[.3,.8]])
+
+
+def test_fragmented_doorway_track_keeps_original_event():
+    tracker = Tracker()
+    for now in range(3):
+        events = tracker.update([detection(x=.30)], now, [])
+    original = tracker.tracks[events[0]['track_id']]
+    original.event_id = 'original'
+
+    # A brief gap and a jump large enough to start another track.
+    assert tracker.update([], 3, []) == []
+    for now in range(4, 7):
+        assert tracker.update([detection(x=.48)], now, []) == []
+    assert [(track.event_id, track.last) for track in tracker.tracks.values()] == [('original', 6)]
+
+
+def test_nearby_people_who_overlap_in_time_keep_separate_events():
+    tracker = Tracker()
+    for now in range(3):
+        tracker.update([detection(x=.30)], now, [])
+    for now in range(3, 6):
+        events = tracker.update([detection(x=.30), detection(x=.48)], now, [])
+    assert len(events) == 1
+    assert events[0]['box'] == detection(x=.48)['box']
+
+
+def test_return_after_gap_can_alert_again():
+    tracker = Tracker()
+    for now in range(3):
+        tracker.update([detection(x=.30)], now, [])
+    for now in range(6, 9):
+        events = tracker.update([detection(x=.48)], now, [])
+    assert len(events) == 1

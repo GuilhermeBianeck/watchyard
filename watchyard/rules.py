@@ -45,6 +45,7 @@ class Track:
     alerted: bool = False
     displacement: float = 0
     event_id: str | None = None
+    first_box: list = field(default_factory=list)
 
 
 class Tracker:
@@ -71,13 +72,14 @@ class Tracker:
             if i not in assignments and key not in matched:
                 assignments[i] = key
                 matched.add(key)
+        confirmed_tracks = []
         for i, d in enumerate(detections):
             box = d['box']
             if i in assignments:
                 t = self.tracks[assignments[i]]
             else:
                 self.counter += 1
-                t = Track(self.counter, d['label'], box, center(box), now, now)
+                t = Track(self.counter, d['label'], box, center(box), now, now, first_box=box)
                 self.tracks[t.id] = t
             t.last, t.box, t.label = now, box, d['label']
             foot = ((box[0]+box[2])/2, box[3])
@@ -92,6 +94,27 @@ class Tracker:
             confirmed = len(t.observations) >= confirmation
             moving = t.label != 'car' or t.displacement >= 0.035
             if confirmed and moving and not t.alerted:
-                t.alerted = True
-                events.append({**d, 'track_id': t.id})
+                confirmed_tracks.append((t, d))
+
+        for track, detection in confirmed_tracks:
+            previous = self.recent_predecessor(track)
+            track.alerted = True
+            if previous:
+                # Continue the existing event so its replay includes the later observations.
+                track.event_id = previous.event_id
+                del self.tracks[previous.id]
+            else:
+                events.append({**detection, 'track_id': track.id})
         return events
+
+    def recent_predecessor(self, track):
+        # Only stitch sequential tracks. Two people visible at once remain distinct.
+        candidates = [
+            previous for previous in self.tracks.values()
+            if previous.alerted
+            and previous.label == track.label
+            and 0 < track.first - previous.last <= 3
+            and math.dist(center(previous.box), center(track.first_box)) <= 0.23
+        ]
+        return min(candidates, key=lambda previous: math.dist(center(previous.box), center(track.first_box)),
+                   default=None)
