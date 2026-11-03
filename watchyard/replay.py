@@ -131,9 +131,13 @@ class Clips:
     SAVED_BYTES = 2 * 1024**3
     MIN_FREE = 1024**3
     CACHE_SECONDS = 86400
+    MAX_AFTER_ALERT = 300
+    RECORDER_SETTLE = 15
+    SEEK_ALLOWANCE = 6
 
-    def __init__(self, settings, stop):
+    def __init__(self, settings, stop, store=None):
         self.settings, self.stop = settings, stop
+        self.store = store
         self.directory = settings.path / 'clips'
         self.directory.mkdir(mode=0o700, exist_ok=True)
         self.lock = threading.RLock()
@@ -168,15 +172,30 @@ class Clips:
             rows = self.db.execute('SELECT * FROM clips WHERE saved=1 ORDER BY event_created DESC').fetchall()
         return [self.public(dict(r)) for r in rows]
 
+    def window(self, event):
+        created = event['created']
+        if event.get('first_seen') is not None and event.get('last_seen') is not None:
+            # Bound both ends even for long-lived tracks or delayed confirmation.
+            first = max(created-60, min(event['first_seen'], created))
+            end = min(created+self.MAX_AFTER_ALERT, max(created+30, event['last_seen']+15))
+            return first-15, end
+        if event['label'] == 'cat':
+            # Older alerts did not record observations. Give feeding visits more context.
+            return created-30, created+180
+        return created-10, created+30
+
     def request(self, event):
         now = time.time()
         with self.lock:
             row = self.db.execute('SELECT * FROM clips WHERE event_id=?', (event['id'],)).fetchone()
-            if row and (row['state'] in ('queued', 'preparing') or
-                        (row['state'] == 'ready' and self.path(row['id']).is_file())):
-                self.db.execute('UPDATE clips SET accessed=? WHERE id=?', (now, row['id']))
-                self.db.commit()
-                return self.get(row['id'])
+            start, end = self.window(event)
+            if row:
+                in_progress = row['state'] in ('queued', 'preparing')
+                ready = row['state'] == 'ready' and self.path(row['id']).is_file()
+                covers_window = row['start'] <= start and row['end'] >= end
+                if in_progress or (ready and (row['saved'] or covers_window)):
+                    self.touch(row['id'])
+                    return self.get(row['id'])
             self.recorder.track(event['camera'])
             count = self.db.execute("SELECT count(*) FROM clips WHERE state IN ('queued','preparing')").fetchone()[0]
             if count >= 8:
@@ -184,11 +203,10 @@ class Clips:
             if shutil.disk_usage(self.directory).free < self.MIN_FREE:
                 raise ReplayError('The server needs at least 1 GB of free space to prepare a replay.')
             key = row['id'] if row else uuid.uuid4().hex
-            start, end = event['created'] - 10, event['created'] + 30
-            not_before = end + 15
+            not_before = end + self.RECORDER_SETTLE
             if row:
-                self.db.execute("UPDATE clips SET state='queued',error='',warning='',not_before=?,accessed=? WHERE id=?",
-                                (not_before, now, key))
+                self.db.execute("UPDATE clips SET state='queued',error='',warning='',start=?,end=?,not_before=?,accessed=? WHERE id=?",
+                                (start, end, not_before, now, key))
             else:
                 self.db.execute('''INSERT INTO clips
                     (id,event_id,camera,camera_name,label,event_created,start,end,created,accessed,not_before,state)
@@ -274,16 +292,18 @@ class Clips:
                 '-rtsp_transport', 'tcp', '-timeout', '10000000']
         if runtime.decoder == 'videotoolbox':
             args += ['-hwaccel', 'videotoolbox']
-        args += ['-i', self.recorder.replay_url(clip['camera'], clip['start'], clip['end'] + 6),
-                 '-t', '46', '-an', '-sn', '-vf',
+        requested_duration = clip['end'] - clip['start']
+        capture_duration = requested_duration + self.SEEK_ALLOWANCE
+        args += ['-i', self.recorder.replay_url(clip['camera'], clip['start'], clip['end'] + self.SEEK_ALLOWANCE),
+                 '-t', str(capture_duration), '-an', '-sn', '-vf',
                  'scale=w=1280:h=720:force_original_aspect_ratio=decrease:force_divisible_by=2,setsar=1',
                  '-r', '15', '-c:v', 'h264_videotoolbox' if runtime.decoder == 'videotoolbox' else 'libx264']
         if runtime.decoder != 'videotoolbox':
             args += ['-preset', 'veryfast', '-threads', '2']
         args += ['-b:v', '1500k', '-pix_fmt', 'yuv420p', '-movflags', '+faststart',
-                 '-fs', str(32 * 1024**2), '-y', str(part)]
+                 '-fs', str(80 * 1024**2), '-y', str(part)]
         try:
-            self.run_process(args, 100)
+            self.run_process(args, max(100, capture_duration + 45))
             data = self.run_process([shutil.which('ffprobe') or 'ffprobe', '-v', 'error',
                                      '-show_entries', 'format=duration:stream=codec_name',
                                      '-of', 'json', str(part)], 10)
@@ -291,7 +311,7 @@ class Clips:
             duration = float(info['format']['duration'])
             if duration < 4 or not any(s['codec_name'] == 'h264' for s in info['streams']):
                 raise ReplayError('The recorder returned an incomplete clip. Try again shortly.')
-            if duration < 38:
+            if duration < requested_duration - 2:
                 warning = 'The recorder returned a shorter replay. Some context may be missing.'
             self.run_process([ffmpeg, '-nostdin', '-loglevel', 'error', '-i', str(part),
                               '-frames:v', '1', '-q:v', '3', '-y', str(poster)], 15)
@@ -308,19 +328,34 @@ class Clips:
 
     def work_once(self):
         with self.lock:
-            row = self.db.execute("SELECT * FROM clips WHERE state='queued' AND not_before<=? ORDER BY created LIMIT 1",
-                                  (time.time(),)).fetchone()
-            if not row: return False
-            self.db.execute("UPDATE clips SET state='preparing' WHERE id=?", (row['id'],))
+            rows = self.db.execute("SELECT * FROM clips WHERE state='queued' AND not_before<=? ORDER BY created",
+                                   (time.time(),)).fetchall()
+            clip = None
+            for row in rows:
+                clip = dict(row)
+                event = self.store.event(clip['event_id']) if self.store else None
+                if event:
+                    start, end = self.window(event)
+                    not_before = end + self.RECORDER_SETTLE
+                    self.db.execute('UPDATE clips SET start=?,end=?,not_before=? WHERE id=?',
+                                    (start, end, not_before, clip['id']))
+                    clip.update(start=start, end=end, not_before=not_before)
+                    if not_before > time.time():
+                        clip = None
+                        continue
+                self.db.execute("UPDATE clips SET state='preparing' WHERE id=?", (clip['id'],))
+                break
             self.db.commit()
+            if clip is None:
+                return False
         try:
-            state, error = self.prepare(dict(row))
+            state, error = self.prepare(clip)
         except Exception as exc:
             state, error = ('queued', '') if self.stop.is_set() else (
                 'failed', str(exc) if isinstance(exc, ReplayError) else 'Replay preparation failed. Try again shortly.')
             log.warning('Replay job failed (%s)', type(exc).__name__)
         with self.lock:
-            self.db.execute('UPDATE clips SET state=?,error=? WHERE id=?', (state, error, row['id']))
+            self.db.execute('UPDATE clips SET state=?,error=? WHERE id=?', (state, error, clip['id']))
             self.db.commit()
         self.cleanup()
         return True

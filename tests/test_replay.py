@@ -206,3 +206,37 @@ def test_retained_alert_lookup_works_beyond_recent_activity(tmp_path):
     assert old['id'] not in [e['id'] for e in client.get('/api/events').json()]
     assert client.get('/api/events/'+old['id']+'/details').json()['camera']==2
     assert client.get('/api/events/'+'f'*32+'/details').status_code==404
+
+
+def test_replay_waits_for_cat_to_leave_and_uses_first_observation(tmp_path):
+    service = Service(Settings(tmp_path))
+    now = time.time()
+    key = service.store.add({'id': 2, 'name': 'Entrada'}, 'cat', .9, 'cat.jpg',
+                            first_seen=now-80, last_seen=now-60)
+    service.store.db.execute('UPDATE events SET created=? WHERE id=?', (now-60, key))
+    service.store.db.commit()
+    clip = service.clips.request(service.store.event(key))
+    assert clip['start'] == now-95
+    assert clip['end'] == now-30
+
+    # The same cat is still eating after the original cutoff.
+    service.store.extend_observations([key], now-4)
+    service.clips.prepare = lambda _: pytest.fail('Replay started before post-roll was available')
+    assert not service.clips.work_once()
+    assert service.clips.get(clip['id'])['end'] == now+11
+
+    service.store.extend_observations([key], now-40)
+    assert service.store.event(key)['last_seen'] == now-4
+
+
+def test_old_cat_preview_is_rebuilt_with_wider_window(tmp_path):
+    service = Service(Settings(tmp_path))
+    clip = ready_clip(service)
+    service.store.db.execute("UPDATE events SET label='cat'")
+    service.store.db.commit()
+    event = service.store.event(clip['event_id'])
+    replacement = service.clips.request(event)
+    assert replacement['id'] == clip['id']
+    assert replacement['state'] == 'queued'
+    assert replacement['start'] == event['created']-30
+    assert replacement['end'] == event['created']+180

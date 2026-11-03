@@ -44,6 +44,7 @@ class Track:
     observations: list = field(default_factory=list)
     alerted: bool = False
     displacement: float = 0
+    event_id: str | None = None
 
 
 class Tracker:

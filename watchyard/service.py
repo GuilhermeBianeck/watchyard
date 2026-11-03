@@ -27,7 +27,7 @@ class Service:
         self.runtime = Runtime.read()
         self.stop = threading.Event()
         self.store = Store(settings.path)
-        self.clips = Clips(settings,self.stop)
+        self.clips = Clips(settings,self.stop,self.store)
         self.live = Live(settings,self.stop)
         self.cameras = {i:Camera(i,settings,self.stop) for i in (c['id'] for c in settings.snapshot()['cameras'])}
         self.trackers = {i:Tracker() for i in self.cameras}
@@ -104,9 +104,16 @@ class Service:
                     camera.analysed_frames += 1
                     camera.inference_ms = round((time.perf_counter()-start)*1000,1)
                     window=max(3,config['confirmation_frames']/config['inference_fps']+.5)
-                    events = self.trackers[c['id']].update(detections,time.monotonic(),c['zone'],config['confirmation_frames'],window=window)
+                    tracker = self.trackers[c['id']]
+                    observed = time.monotonic()
+                    events = tracker.update(detections,observed,c['zone'],config['confirmation_frames'],window=window)
+                    self.store.extend_observations(
+                        [track.event_id for track in tracker.tracks.values()
+                         if track.event_id and track.last == observed], captured)
                     for event in events:
-                        self.record(c,frame,event,config)
+                        track = tracker.tracks[event['track_id']]
+                        first_seen = captured - (observed - track.first)
+                        track.event_id = self.record(c,frame,event,config,first_seen=first_seen,last_seen=captured)
                     self.detector_error = None
                 except Exception as exc:
                     self.detector_error = type(exc).__name__
@@ -115,7 +122,7 @@ class Service:
                 next_due[c['id']] = scheduled+1/max(0.5,config['inference_fps'])
             self.stop.wait(0.02)
 
-    def record(self, camera, frame, event, config):
+    def record(self, camera, frame, event, config, *, first_seen=None, last_seen=None):
         image = frame.copy()
         draw_detection(image,event)
         name = uuid.uuid4().hex+'.jpg'
@@ -128,8 +135,10 @@ class Service:
             status = 'muted'
         elif status == 'pending' and not self.notifications.targets():
             status = 'unpaired'
-        self.store.add(camera,event['label'],event['confidence'],name,status,reason,mode)
+        event_id = self.store.add(camera,event['label'],event['confidence'],name,status,reason,mode,
+                                  first_seen=first_seen,last_seen=last_seen)
         log.info('Confirmed %s on camera %s (%s)',event['label'],camera['id'],status)
+        return event_id
 
     def overlays(self):
         return {c['id']: self.cameras[c['id']].display_detections(c)

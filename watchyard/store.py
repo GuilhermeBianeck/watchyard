@@ -18,7 +18,7 @@ class Store:
             label TEXT, confidence REAL, snapshot TEXT, status TEXT,
             attempts INTEGER DEFAULT 0, next_try REAL DEFAULT 0, detail TEXT DEFAULT '')""")
         columns={r[1] for r in self.db.execute('PRAGMA table_info(events)')}
-        for name,definition in [('feedback',"TEXT DEFAULT 'unreviewed'"),('sent_at','REAL'),('notify_mode',"TEXT DEFAULT ''")]:
+        for name,definition in [('feedback',"TEXT DEFAULT 'unreviewed'"),('sent_at','REAL'),('notify_mode',"TEXT DEFAULT ''"),('first_seen','REAL'),('last_seen','REAL')]:
             if name not in columns:
                 self.db.execute(f'ALTER TABLE events ADD COLUMN {name} {definition}')
         self.db.execute("CREATE TABLE IF NOT EXISTS recipient_deliveries (event_id TEXT,recipient TEXT,status TEXT DEFAULT 'pending',attempts INTEGER DEFAULT 0,next_try REAL DEFAULT 0,sent_at REAL,error TEXT DEFAULT '',created REAL,PRIMARY KEY(event_id,recipient))")
@@ -28,12 +28,20 @@ class Store:
         self.db.execute("CREATE TABLE IF NOT EXISTS health_outbox (id TEXT PRIMARY KEY,key TEXT,created REAL,body TEXT,status TEXT DEFAULT 'pending',attempts INTEGER DEFAULT 0,next_try REAL DEFAULT 0)")
         self.db.commit()
 
-    def add(self,camera,label,confidence,snapshot,status='pending',detail='',notify_mode=''):
+    def add(self,camera,label,confidence,snapshot,status='pending',detail='',notify_mode='',*,first_seen=None,last_seen=None):
         key=uuid.uuid4().hex
         with self.lock:
-            self.db.execute('INSERT INTO events (id,created,camera,camera_name,label,confidence,snapshot,status,detail,notify_mode) VALUES (?,?,?,?,?,?,?,?,?,?)',(key,time.time(),camera['id'],camera['name'],label,confidence,snapshot,status,detail,notify_mode))
+            self.db.execute('INSERT INTO events (id,created,camera,camera_name,label,confidence,snapshot,status,detail,notify_mode,first_seen,last_seen) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',(key,time.time(),camera['id'],camera['name'],label,confidence,snapshot,status,detail,notify_mode,first_seen,last_seen))
             self.db.commit()
         return key
+
+    def extend_observations(self, event_ids, seen):
+        if not event_ids:
+            return
+        with self.lock:
+            self.db.executemany('UPDATE events SET last_seen=? WHERE id=? AND last_seen<?',
+                                [(seen, key, seen) for key in event_ids])
+            self.db.commit()
 
     def recent(self,limit=50):
         with self.lock:

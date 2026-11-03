@@ -6,13 +6,18 @@ dashboard. New Telegram event alerts have a **Replay on home Wi-Fi** link to the
 same authenticated page. An approved Telegram account still needs a signed-in
 browser to use the dashboard. The link grants no access by itself.
 
-The requested context is 10 seconds before and 30 seconds after the alert. The
-recorder seeks to a nearby keyframe; up to six extra seconds are requested to
-allow for that seek. The app reports the resulting duration and warns about
-recording gaps or a shorter result. On a fresh alert it waits until the following
-30 seconds and a 15-second settling interval have passed before retrieval. A
-recording may have been overwritten or may never have existed; an alert snapshot
-does not prove the recorder captured video.
+For new alerts, Watchyard starts the replay 15 seconds before the track's
+first observation and keeps at least 15 seconds after its last observation,
+with at least 30 seconds after the alert. It can follow a track for up to five
+minutes after the alert, with up to 75 seconds of lead-in if confirmation was
+delayed. A fresh replay waits for the track to go quiet and for the recorder to
+finish writing. If detection loses the subject, the replay uses the last
+observation available. Older cat alerts use 30 seconds before and three minutes
+after the alert because their observation times were never stored.
+
+The recorder seeks to a nearby keyframe. Watchyard requests up to six extra
+seconds for that seek and warns about gaps or a shorter result. A recording may
+have been overwritten or may never have existed.
 
 ## Download and keep
 
