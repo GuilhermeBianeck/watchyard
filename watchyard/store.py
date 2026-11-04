@@ -26,6 +26,11 @@ class Store:
         self.db.execute('CREATE INDEX IF NOT EXISTS samples_created ON samples(created)')
         self.db.execute('CREATE TABLE IF NOT EXISTS health_state (key TEXT PRIMARY KEY, name TEXT, healthy INTEGER, changed REAL, announced INTEGER DEFAULT 0)')
         self.db.execute("CREATE TABLE IF NOT EXISTS health_outbox (id TEXT PRIMARY KEY,key TEXT,created REAL,body TEXT,status TEXT DEFAULT 'pending',attempts INTEGER DEFAULT 0,next_try REAL DEFAULT 0)")
+        self.db.execute("""CREATE TABLE IF NOT EXISTS incident_assessments (
+            event_id TEXT PRIMARY KEY, assessed_at REAL NOT NULL, presence TEXT NOT NULL,
+            outcome TEXT NOT NULL, reason TEXT NOT NULL, zone TEXT NOT NULL,
+            observations INTEGER NOT NULL, dwell_seconds REAL NOT NULL)""")
+        self.db.execute('CREATE INDEX IF NOT EXISTS incident_assessed_at ON incident_assessments(assessed_at DESC)')
         self.db.commit()
 
     def add(self,camera,label,confidence,snapshot,status='pending',detail='',notify_mode='',*,first_seen=None,last_seen=None,correlation_hint=None):
@@ -42,6 +47,27 @@ class Store:
             self.db.executemany('UPDATE events SET last_seen=? WHERE id=? AND last_seen<?',
                                 [(seen, key, seen) for key in event_ids])
             self.db.commit()
+
+    def save_incident_assessment(self, event_id, assessed_at, presence, outcome, reason, zone, observations, dwell_seconds):
+        # Keep the evidence that qualified the event for urgent review, even after it ends.
+        with self.lock, self.db:
+            self.db.execute("""
+                INSERT INTO incident_assessments
+                SELECT id, ?, ?, ?, ?, ?, ?, ? FROM events WHERE id=?
+                ON CONFLICT(event_id) DO UPDATE SET assessed_at=excluded.assessed_at,
+                  presence=excluded.presence, outcome=excluded.outcome, reason=excluded.reason,
+                  zone=excluded.zone, observations=excluded.observations, dwell_seconds=excluded.dwell_seconds
+                WHERE incident_assessments.outcome!='urgent'
+                  AND incident_assessments.assessed_at <= excluded.assessed_at
+                """, (assessed_at, presence, outcome, reason, zone, observations, dwell_seconds, event_id))
+
+    def incident_assessments(self):
+        with self.lock:
+            return [dict(row) for row in self.db.execute("""
+                SELECT a.*, e.camera_name, e.created, e.feedback, e.activity_group
+                FROM incident_assessments a JOIN events e ON e.id=a.event_id
+                ORDER BY a.assessed_at DESC LIMIT 30
+                """)]
 
     def save_plate(self, event_id, plate):
         with self.lock:
@@ -169,6 +195,7 @@ class Store:
             rows=self.db.execute('SELECT snapshot FROM events WHERE created<?',(cutoff,)).fetchall()
             for row in rows:
                 (self.directory/'events'/row['snapshot']).unlink(missing_ok=True)
+            self.db.execute('DELETE FROM incident_assessments WHERE event_id IN (SELECT id FROM events WHERE created<?)', (cutoff,))
             self.db.execute('DELETE FROM events WHERE created<?',(cutoff,))
             self.db.execute('DELETE FROM samples WHERE created<?',(cutoff,))
             self.db.execute('DELETE FROM recipient_deliveries WHERE created<?',(cutoff,))

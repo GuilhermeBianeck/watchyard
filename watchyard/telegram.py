@@ -8,6 +8,7 @@ import time
 
 import requests
 from .members import Members
+from .incidents import AWAY_MINUTES, presence, set_presence
 
 
 log = logging.getLogger(__name__)
@@ -16,6 +17,7 @@ COMMANDS = [
     ('cameras', 'Choose a camera for a snapshot'),
     ('events', 'Recent activity and replays'),
     ('notifications', 'Manage alerts for this account'),
+    ('presence', 'Set home presence for incident simulation'),
     ('help', 'Watchyard help'),
 ]
 CALLBACK = re.compile(
@@ -213,7 +215,7 @@ class Telegram:
         if not parts:
             return
         cmd = parts[0].split('@')[0].lower()
-        if cmd in ('/mute', '/unmute', '/review') and member['role'] != 'admin':
+        if cmd in ('/mute', '/unmute', '/review', '/presence') and member['role'] != 'admin':
             message = 'Only a home manager can use this control.'
             if callback:
                 self.answer(callback, message)
@@ -228,10 +230,11 @@ class Telegram:
                 reply(message)
 
         if cmd in ('/start', '/help'):
-            lines = [f'/{name} — {description}' for name, description in COMMANDS if name != 'help']
+            lines = [f'/{name} — {description}' for name, description in COMMANDS if name not in ('help', 'presence')]
             lines.append('/snapshot [camera ID] — one camera or all cameras')
             if member['role'] == 'admin':
-                lines.extend(['/mute [minutes] — pause home alerts (default 60)', '/unmute — resume home alerts'])
+                lines.extend(['/mute [minutes] — pause home alerts (default 60)', '/unmute — resume home alerts',
+                              '/presence — view or change presence for simulation'])
             reply('Watchyard commands\n' + '\n'.join(lines))
         elif cmd == '/status':
             if callback:
@@ -272,6 +275,22 @@ class Telegram:
             confirm('Your alerts are on.' if enabled else 'Your alerts are paused. Use /notifications to resume.')
             if callback:
                 self.refresh_controls(message, {**member, 'alerts': enabled})
+        elif cmd == '/presence':
+            instructions = 'Use /presence home, /presence away 1 (or 4, 8, 24 hours), or /presence paused.'
+            if len(parts) == 1:
+                state = presence(self.settings.snapshot())
+            elif len(parts) == 2 and parts[1] in ('home', 'paused'):
+                state = set_presence(self.settings, parts[1])
+            elif len(parts) == 3 and parts[1] == 'away' and parts[2] in {str(m // 60) for m in AWAY_MINUTES}:
+                state = set_presence(self.settings, 'away', int(parts[2]) * 60)
+            else:
+                reply(instructions)
+                return
+            mode = {'home': 'At home', 'away': 'Away', 'paused': 'Paused', 'unknown': 'Unknown'}[state['mode']]
+            if state['mode'] == 'away':
+                until = dt.datetime.fromtimestamp(state['until']).astimezone().strftime('%d %b %H:%M %Z')
+                mode += ' until ' + until
+            reply(f'Incident simulation: {mode}.\n{instructions}')
         elif cmd == '/mute':
             if len(parts) > 2 or (len(parts) == 2 and not re.fullmatch(r'[0-9]{1,4}', parts[1])):
                 reply('Use /mute followed by 1–1440 minutes.')

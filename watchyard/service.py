@@ -19,6 +19,7 @@ from .replay import Clips
 from .live import Live
 from .plates import Plates
 from .correlation import hint as correlation_hint
+from .incidents import IncidentSimulation
 
 log = logging.getLogger('watchyard')
 
@@ -29,6 +30,7 @@ class Service:
         self.runtime = Runtime.read()
         self.stop = threading.Event()
         self.store = Store(settings.path)
+        self.incidents = IncidentSimulation(self.store)
         self.plates = Plates(settings, self.store, self.stop)
         self.clips = Clips(settings,self.stop,self.store)
         self.cameras = {i:Camera(i,settings,self.stop) for i in (c['id'] for c in settings.snapshot()['cameras'])}
@@ -133,6 +135,7 @@ class Service:
             track = tracker.tracks[event['track_id']]
             first_seen = captured - (observed - track.first)
             track.event_id = self.record(camera_config,frame,event,config,first_seen=first_seen,last_seen=captured)
+        self.incidents.observe(camera_config, tracker.tracks, config, observed, captured)
 
     def ready(self):
         if self.detector in ('loading', 'unavailable') or self.detector_error:

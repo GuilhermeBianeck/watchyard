@@ -2,6 +2,19 @@
 from urllib.parse import quote, urlsplit
 
 
+def validate_review_zone(zone):
+    if not isinstance(zone, list) or zone and not 3 <= len(zone) <= 20:
+        raise ValueError('A review area needs 3 to 20 boundary points, or no points to clear it')
+    if any(not isinstance(point, list) or len(point) != 2 or
+           any(type(value) not in (int, float) or not 0 <= value <= 1 for value in point)
+           for point in zone):
+        raise ValueError('Invalid review area coordinates')
+    if zone:
+        area = sum(x * y2 - x2 * y for (x, y), (x2, y2) in zip(zone, zone[1:] + zone[:1]))
+        if abs(area) < 0.0001:
+            raise ValueError('Draw a review area with a visible boundary')
+
+
 def validate_inventory(cameras):
     if not isinstance(cameras, list) or not cameras or len(cameras) > 16:
         raise ValueError('Configure between 1 and 16 cameras')
@@ -9,7 +22,7 @@ def validate_inventory(cameras):
     for camera in cameras:
         if not isinstance(camera, dict) or set(camera) - {
             'id', 'name', 'enabled', 'zone', 'labels', 'alert_modes', 'schedule', 'channel', 'replay_track',
-            'ignore_boxes', 'shared_ingest', 'plate_zone'
+            'ignore_boxes', 'shared_ingest', 'plate_zone', 'expected_zone', 'restricted_zone'
         }:
             raise ValueError('Unknown camera fields; keep stream URLs in secrets.json')
         camera_id = camera.get('id')
@@ -30,6 +43,9 @@ def validate_inventory(cameras):
                     or any(type(v) not in (int, float) or not 0 <= v <= 1 for v in rect)
                     or rect[0] >= rect[2] or rect[1] >= rect[3]):
                 raise ValueError('Plate zones need four ordered coordinates between 0 and 1')
+        for key in ('expected_zone', 'restricted_zone'):
+            if key in camera:
+                validate_review_zone(camera[key])
         ignored = camera.get('ignore_boxes', {})
         if not isinstance(ignored, dict):
             raise ValueError('ignore_boxes must map object labels to lists of rectangles')

@@ -95,7 +95,7 @@ function renderCameras() {
         <span class="expand-icon">${icon('expand')}</span>
       </button>
       <div class="camera-bottom"><div><h3>${esc(c.name)}</h3><p id="detail-${c.id}" hidden></p></div>
-        <button class="camera-settings" data-zone="${c.id}" aria-label="Edit ${esc(c.name)} alert area">${icon('settings')}</button>
+        <button class="camera-settings" data-zone="${c.id}" aria-label="Edit ${esc(c.name)} camera areas">${icon('settings')}</button>
       </div>
     </article>`).join('');
     grid.querySelectorAll('button[data-camera]').forEach(button =>
@@ -161,7 +161,7 @@ $('camera-activity').addEventListener('click', () => {
   navigate('activity');
 });
 
-async function refresh(){if(!signedIn||busy)return;busy=true;try{[state,events,diagnostics]=await Promise.all([api('/api/status'),api('/api/events'),api('/api/diagnostics')]);renderReliability();if(admin){deviceInfo=await api('/api/devices');renderDevices();}tick++;renderCameras();renderEvents();if(window.WatchyardReplay)await window.WatchyardReplay.refreshSaved();applyAccess();if(linkedEvent&&window.WatchyardReplay){const id=linkedEvent;linkedEvent=null;window.WatchyardReplay.openEvent(id);}const online=state.cameras.filter(c=>c.online).length;
+async function refresh(){if(!signedIn||busy)return;busy=true;try{[state,events,diagnostics]=await Promise.all([api('/api/status'),api('/api/events'),api('/api/diagnostics')]);renderReliability();if(admin){deviceInfo=await api('/api/devices');renderDevices();}tick++;renderCameras();renderEvents();if(window.WatchyardReplay)await window.WatchyardReplay.refreshSaved();applyAccess();window.WatchyardIncidents?.refresh();if(linkedEvent&&window.WatchyardReplay){const id=linkedEvent;linkedEvent=null;window.WatchyardReplay.openEvent(id);}const online=state.cameras.filter(c=>c.online).length;
 const count=state.cameras.length;
 const analysing=state.cameras.filter(c=>c.enabled&&c.online);
 const starting=state.detector==='loading'&&!state.detector_error;
@@ -170,11 +170,129 @@ const connection=$('connection-label');
 connection.innerHTML=`<span class="dot ${online===count?'online':'offline'}"></span>${online===count?'Connected':'Camera offline'}`;
 $('home-status').textContent=`${online} of ${count} cameras online`+(starting?' · Starting detection':healthy?'':' · Detection needs attention');
 const muted=state.settings.muted_until>Date.now()/1000;const enabled=state.settings.enabled;$('enabled').checked=enabled;$('alert-state').textContent=!enabled?'Alerts are switched off.':muted?'Quiet until '+new Date(state.settings.muted_until*1000).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}):'Alerts are enabled.';$('quick-state').textContent=!enabled?'Alerts off':muted?'Quiet time':'Alerts on';$('quick-detail').textContent=muted?'Notifications paused':'Alert settings';$('quick-mute').querySelector('strong').textContent=muted?'Resume alerts':'Mute for 1 hour';$('telegram-status').textContent=state.telegram.error|| (state.telegram.paired?(state.telegram.accounts||1)+' approved account(s)':'Waiting for pairing');const botLink=$('open-telegram');botLink.hidden=!state.telegram.username;if(state.telegram.username)botLink.href='https://t.me/'+encodeURIComponent(state.telegram.username);botLink.classList.toggle('hidden',!state.telegram.username);$('telegram-dot').className='dot '+(state.telegram.paired&&!state.telegram.error?'online':'offline');$('test').disabled=!state.notifications.some(p=>p.destinations)||!admin;for(const provider of state.notifications){const key={'Pushover':'pushover','Custom webhook':'webhook'}[provider.name];if(key)$(key+'-status').textContent=provider.destinations?'Ready':provider.enabled?'Needs configuration':'Off';}$('detector').textContent=state.detector_error||state.detector;$('memory').textContent=state.memory_mb+' MB';if(document.activeElement!==$('confidence')){$('confidence').value=Math.round(state.settings.confidence*100);$('confidence-value').value=$('confidence').value+'%';}}catch(e){if(signedIn){$('connection-label').innerHTML='<span class="dot offline"></span>Connection lost';$('home-status').textContent='Connection lost. Check your network and refresh.';}}finally{busy=false;}}
-function drawZone(){const canvas=$('zone-canvas'),ctx=canvas.getContext('2d');ctx.clearRect(0,0,960,540);if(zoneImage.complete&&zoneImage.naturalWidth)ctx.drawImage(zoneImage,0,0,960,540);if(points.length){ctx.beginPath();points.forEach(([x,y],i)=>i?ctx.lineTo(x*960,y*540):ctx.moveTo(x*960,y*540));if(points.length>2)ctx.closePath();ctx.fillStyle='rgba(0,122,255,.24)';ctx.fill();ctx.strokeStyle='#75c4ff';ctx.lineWidth=3;ctx.stroke();for(const [x,y] of points){ctx.beginPath();ctx.arc(x*960,y*540,7,0,2*Math.PI);ctx.fillStyle='#fff';ctx.fill();}}$('zone-instruction').textContent=points.length?(points.length<3?'Add at least three points before saving.':`${points.length} boundary points. Only objects entering this area will alert.`):'Full view selected. Tap the picture to draw a boundary.';}
-function openZone(id){if(!admin)return;editing=state.cameras.find(c=>c.id===id);points=editing.zone.map(p=>[...p]);$('zone-title').textContent=editing.name;$('camera-enabled').checked=editing.enabled;document.querySelectorAll('input[name=label]').forEach(i=>i.checked=editing.labels.includes(i.value));zoneImage=new Image();zoneImage.onload=drawZone;zoneImage.src=`/api/cameras/${id}/snapshot?t=${Date.now()}`;$('zone-dialog').showModal();drawZone();}
-$('zone-canvas').addEventListener('click',e=>{if(points.length>=20){$('zone-instruction').textContent='Use at most 20 boundary points.';return;}const r=e.target.getBoundingClientRect();points.push([(e.clientX-r.left)/r.width,(e.clientY-r.top)/r.height]);drawZone();});
-$('reset-zone').addEventListener('click',()=>{points=[];drawZone();});$('undo-zone').addEventListener('click',()=>{points.pop();drawZone();});$('close-zone').addEventListener('click',()=>$('zone-dialog').close());$('close-image').addEventListener('click',()=>$('image-dialog').close());$('close-camera').addEventListener('click',()=>$('camera-dialog').close());$('camera-dialog').addEventListener('close',()=>activeCamera=null);$('edit-expanded').addEventListener('click',()=>{const id=activeCamera;$('camera-dialog').close();openZone(id);});
-$('zone-form').addEventListener('submit',async e=>{e.preventDefault();if(points.length&&points.length<3){$('zone-instruction').textContent='Add three points or choose Full view.';return;}try{await api('/api/cameras/'+editing.id,{enabled:$('camera-enabled').checked,labels:[...document.querySelectorAll('input[name=label]:checked')].map(i=>i.value),zone:points});$('zone-dialog').close();notice('Alert area saved');await refresh();}catch(e){$('zone-instruction').textContent=e.message;}});
+const cameraAreas = {
+  zone: {description: 'Controls where this camera records events.', clear: 'Full view', color: '#75c4ff', fill: 'rgba(0,122,255,.24)'},
+  expected_zone: {description: 'An entry where visitors are expected. Used for simulation.', clear: 'Clear area', color: '#57d7ac', fill: 'rgba(35,155,114,.24)'},
+  restricted_zone: {description: 'An area where entry may need review. Used for simulation.', clear: 'Clear area', color: '#ffbe70', fill: 'rgba(185,103,23,.24)'},
+};
+let areaDraft, areaCursor;
+
+function drawZone() {
+  const canvas = $('zone-canvas'), ctx = canvas.getContext('2d');
+  const layer = $('zone-layer').value, area = cameraAreas[layer];
+  ctx.clearRect(0, 0, 960, 540);
+  const pictureReady = zoneImage.complete && zoneImage.naturalWidth;
+  if (pictureReady) ctx.drawImage(zoneImage, 0, 0, 960, 540);
+  if (points.length) {
+    ctx.beginPath();
+    points.forEach(([x,y], i) => i ? ctx.lineTo(x*960,y*540) : ctx.moveTo(x*960,y*540));
+    if (points.length > 2) ctx.closePath();
+    ctx.fillStyle = area.fill;
+    ctx.fill();
+    ctx.strokeStyle = area.color;
+    ctx.lineWidth = 3;
+    ctx.stroke();
+    for (const [x,y] of points) {
+      ctx.beginPath();
+      ctx.arc(x*960, y*540, 7, 0, 2*Math.PI);
+      ctx.fillStyle = '#fff';
+      ctx.fill();
+    }
+  }
+  if (document.activeElement === canvas && pictureReady) {
+    ctx.strokeStyle = '#fff';
+    ctx.strokeRect(areaCursor[0]*960-8, areaCursor[1]*540-8, 16, 16);
+  }
+  $('zone-description').textContent = area.description;
+  $('reset-zone').textContent = area.clear;
+  $('alert-area-controls').classList.toggle('hidden', layer !== 'zone');
+  $('zone-instruction').textContent = !pictureReady ? 'Waiting for a current camera image.' :
+    points.length >= 3 ? `${points.length} boundary points. Save to apply.` :
+    points.length ? 'Add at least three points to draw a boundary.' :
+    'Tap to place points, or use arrow keys and Enter on the camera image.';
+}
+
+function openZone(id) {
+  if (!admin) return;
+  editing = state.cameras.find(c => c.id === id);
+  if (!editing) return;
+  areaDraft = Object.fromEntries(Object.keys(cameraAreas).map(key => [key, (editing[key] || []).map(p => [...p])]));
+  $('zone-layer').value = 'zone';
+  areaCursor = [.5, .5];
+  points = areaDraft.zone;
+  $('zone-title').textContent = editing.name;
+  $('camera-enabled').checked = editing.enabled;
+  document.querySelectorAll('input[name=label]').forEach(i => i.checked = editing.labels.includes(i.value));
+  zoneImage = new Image();
+  zoneImage.onload = drawZone;
+  zoneImage.onerror = () => { $('zone-instruction').textContent = 'Camera image unavailable. Reopen this editor when the camera is online.'; };
+  zoneImage.src = `/api/cameras/${id}/snapshot?t=${Date.now()}`;
+  $('zone-dialog').showModal();
+  drawZone();
+}
+
+function addAreaPoint(point) {
+  if (!zoneImage.naturalWidth) return;
+  if (points.length >= 20) {
+    $('zone-instruction').textContent = 'Use at most 20 boundary points.';
+    return;
+  }
+  points.push(point);
+  drawZone();
+}
+
+$('zone-layer').addEventListener('change', e => { points = areaDraft[e.target.value]; drawZone(); });
+$('zone-canvas').addEventListener('click', e => {
+  const r = e.target.getBoundingClientRect();
+  addAreaPoint([(e.clientX-r.left)/r.width, (e.clientY-r.top)/r.height]);
+});
+$('zone-canvas').addEventListener('keydown', e => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    addAreaPoint([...areaCursor]);
+    return;
+  }
+  const delta = {ArrowLeft: [-.02,0], ArrowRight: [.02,0], ArrowUp: [0,-.02], ArrowDown: [0,.02]}[e.key];
+  if (!delta) return;
+  e.preventDefault();
+  areaCursor = areaCursor.map((value, i) => Math.max(0, Math.min(1, value + delta[i])));
+  drawZone();
+});
+$('zone-canvas').addEventListener('focus', drawZone);
+$('zone-canvas').addEventListener('blur', drawZone);
+$('reset-zone').addEventListener('click', () => { points.length = 0; drawZone(); });
+$('undo-zone').addEventListener('click', () => { points.pop(); drawZone(); });
+$('close-zone').addEventListener('click', () => $('zone-dialog').close());
+$('close-image').addEventListener('click', () => $('image-dialog').close());
+$('close-camera').addEventListener('click', () => $('camera-dialog').close());
+$('camera-dialog').addEventListener('close', () => activeCamera = null);
+$('edit-expanded').addEventListener('click', () => { const id = activeCamera; $('camera-dialog').close(); openZone(id); });
+$('zone-form').addEventListener('submit', async e => {
+  e.preventDefault();
+  const incomplete = Object.keys(areaDraft).find(key => areaDraft[key].length > 0 && areaDraft[key].length < 3);
+  if (incomplete) {
+    $('zone-layer').value = incomplete;
+    points = areaDraft[incomplete];
+    drawZone();
+    $('zone-instruction').textContent = 'Add at least three points or clear this area.';
+    return;
+  }
+  $('save-zone').disabled = true;
+  try {
+    await api('/api/cameras/' + editing.id, {
+      enabled: $('camera-enabled').checked,
+      labels: [...document.querySelectorAll('input[name=label]:checked')].map(i => i.value),
+      ...areaDraft,
+    });
+    $('zone-dialog').close();
+    notice('Camera areas saved');
+    await refresh();
+  } catch (error) {
+    $('zone-instruction').textContent = error.message;
+  } finally {
+    $('save-zone').disabled = false;
+  }
+});
 function resume(){return action('/api/controls',{enabled:true,mute_minutes:0},'Alerts resumed');}
 function quiet(){return action('/api/controls',{mute_minutes:60},'Quiet time enabled for one hour');}
 $('mute').addEventListener('click',quiet);$('resume').addEventListener('click',resume);$('quick-mute').addEventListener('click',()=>state.settings.muted_until>Date.now()/1000?resume():quiet());$('quick-alerts').addEventListener('click',()=>navigate('settings'));
@@ -303,6 +421,7 @@ $('policy-form').addEventListener('submit',async e=>{e.preventDefault();const al
 
 function applyAccess(){
  $('devices-section').classList.toggle('hidden',!admin);
+ $('incident-simulation').classList.toggle('hidden',!admin);
  $('access-role-note').classList.toggle('hidden',admin);
  for(const id of ['enabled','mute','resume','test','confidence','analysis-rate','quick-mute','quick-alerts'])$(id).disabled=!admin;
  document.querySelectorAll('.camera-settings,[data-policy]').forEach(b=>b.disabled=!admin);

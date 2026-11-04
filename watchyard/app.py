@@ -23,6 +23,8 @@ from .service import Service
 from .access import Access, lan_address, lan_network
 from .runtime import Runtime
 from .replay import ReplayError
+from .incidents import presence, set_presence
+from .sources import validate_review_zone
 
 STATIC = Path(__file__).parent/'static'
 
@@ -49,6 +51,13 @@ class CameraUpdate(BaseModel):
     enabled: bool
     labels: list[str]
     zone: list[list[float]] = Field(default_factory=list,max_length=20)
+    expected_zone: list[list[float]] | None = Field(None,max_length=20)
+    restricted_zone: list[list[float]] | None = Field(None,max_length=20)
+
+
+class PresenceUpdate(BaseModel):
+    mode: Literal['home','away','paused']
+    minutes: int | None = None
 
 
 class Schedule(BaseModel):
@@ -146,7 +155,7 @@ def create_app(service=None, run_service=True):
             if not principal:
                 return JSONResponse({'detail':'Sign in to Watchyard'},status_code=401)
             replay_request=request.method=='POST' and re.fullmatch(r'/api/events/[0-9a-f]{32}/replay',request.url.path)
-            administrative=request.url.path.startswith(('/api/devices','/api/invitations')) or (request.method not in ('GET','HEAD','OPTIONS') and request.url.path!='/api/logout' and not replay_request)
+            administrative=request.url.path.startswith(('/api/devices','/api/invitations','/api/incidents/')) or (request.method not in ('GET','HEAD','OPTIONS') and request.url.path!='/api/logout' and not replay_request)
             if administrative and principal['role']!='admin':
                 return JSONResponse({'detail':'This device has view-only access'},status_code=403)
         if request.method not in ('GET','HEAD','OPTIONS'):
@@ -270,8 +279,25 @@ def create_app(service=None, run_service=True):
         return service.overlays()
 
     @app.get('/api/status')
-    def status():
-        return service.status()
+    def status(request: Request):
+        state = service.status()
+        if request.state.principal['role'] != 'admin':
+            state['settings'].pop('incident_presence', None)
+            for camera in state['cameras'] + state['settings']['cameras']:
+                camera.pop('expected_zone', None)
+                camera.pop('restricted_zone', None)
+        return state
+
+    @app.get('/api/incidents/simulation')
+    def incident_simulation():
+        return {'presence': presence(service.settings.snapshot()), 'assessments': service.store.incident_assessments()}
+
+    @app.post('/api/incidents/presence')
+    def incident_presence(data: PresenceUpdate):
+        try:
+            return set_presence(service.settings, data.mode, data.minutes)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from None
 
     @app.get('/healthz')
     def health():
@@ -438,15 +464,25 @@ def create_app(service=None, run_service=True):
             raise HTTPException(422,'A zone needs at least three points')
         if any(len(p)!=2 or any(not 0<=v<=1 for v in p) for p in data.zone):
             raise HTTPException(422,'Invalid zone coordinates')
-        cameras = service.settings.snapshot()['cameras']
-        c = next((c for c in cameras if c['id']==camera_id),None)
-        if c is None:
-            raise HTTPException(404)
-        c.update(data.model_dump())
-        service.settings.save({'cameras':cameras})
-        # A rule change starts new tracking; existing parked cars still require movement.
-        from .rules import Tracker
-        service.trackers[camera_id] = Tracker()
+        try:
+            for zone in (data.expected_zone, data.restricted_zone):
+                if zone is not None:
+                    validate_review_zone(zone)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from None
+        changes = data.model_dump(exclude_none=True)
+        with service.settings.lock:
+            cameras = service.settings.snapshot()['cameras']
+            camera = next((c for c in cameras if c['id']==camera_id),None)
+            if camera is None:
+                raise HTTPException(404)
+            reset = any(camera[key] != changes[key] for key in ('enabled','labels','zone'))
+            camera.update(changes)
+            service.settings.save({'cameras':cameras})
+            if reset:
+                # A detection rule change starts new tracking.
+                from .rules import Tracker
+                service.trackers[camera_id] = Tracker()
         return {'ok':True}
 
     @app.post('/api/test-notification')
@@ -462,12 +498,13 @@ def create_app(service=None, run_service=True):
 
     @app.post('/api/cameras/{camera_id}/alerts')
     def alert_policy(camera_id:int,data:AlertPolicy):
-        cameras=service.settings.snapshot()['cameras']
-        camera=next((c for c in cameras if c['id']==camera_id),None)
-        if camera is None:
-            raise HTTPException(404)
-        camera.update(data.model_dump())
-        service.settings.save({'cameras':cameras})
+        with service.settings.lock:
+            cameras=service.settings.snapshot()['cameras']
+            camera=next((c for c in cameras if c['id']==camera_id),None)
+            if camera is None:
+                raise HTTPException(404)
+            camera.update(data.model_dump())
+            service.settings.save({'cameras':cameras})
         return {'ok':True}
 
     app.mount('/static',StaticFiles(directory=STATIC),name='static')

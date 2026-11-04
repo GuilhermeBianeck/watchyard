@@ -5,6 +5,7 @@ Watchyard adds local object detection, live viewing, and useful alerts to the ca
 - **Live:** Watch on iPhone, Android, or desktop at up to 720p and 10 fps. Analysis runs independently at 1 or 2 fps per camera. Boxes stay visible through short gaps in recognition. Shared ingest can let live video and analysis use one decoder while a camera is watched.
 - **Activity:** Review events, export metadata, and watch, save, or download clips from a supported recorder. Related events can appear together across camera views.
 - **Alerts:** Set zones, schedules, and sound preferences per camera. Use Telegram, optional Pushover, a signed webhook for your own app, or local history alone.
+- **Incident simulation:** Set manual home presence and review what local rules would flag as urgent, with reasons and replay links.
 - **Access:** Create the first owner account from the dashboard. Invite household members to the dashboard or Telegram with one-use links. Choose view-only or management access and revoke devices individually.
 
 The core application is deployed in a local field pilot. See the [roadmap](docs/roadmap.md) for the current release, verification status and priorities.
@@ -32,6 +33,16 @@ The service stores configuration, events, clips, models, and logs under `~/Libra
 [Configure notification providers](docs/cameras-and-notifications.md#notification-providers) to enable one or several delivery methods. Telegram is the default when paired and sends one alert per activity group per account. Pushover and custom webhooks are opt-in. A custom app can receive signed events through its own server and forward them to APNs or FCM. Use **Settings → Send test to enabled destinations** to check setup. In Telegram, use `/cameras` for the snapshot picker, `/status` for health and controls, and `/notifications` for personal alert preferences.
 
 Camera analysis and history stay on the server. Telegram receives alert images; Pushover receives text and optionally a snapshot; webhooks receive event metadata. Review the provider settings before enabling delivery.
+
+## Try incident simulation
+
+From **Cameras**, open a camera’s settings and draw **Expected access** and
+**Restricted access** areas. Then go to **Settings → Incident simulation**
+and set home presence to **Away** for a fixed period, or **At home**. A Telegram
+manager can also use `/presence away 4`, `/presence home` or `/presence paused`.
+The default is **Paused**. **Recent decisions** shows why new person events
+would require review and links to their replay. Simulation uses local rules
+alongside ordinary alerts. See the [incident escalation specification](docs/escalonamento-inteligente.md).
 
 ## Deployment and operation
 
