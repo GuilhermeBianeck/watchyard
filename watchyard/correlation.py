@@ -6,13 +6,21 @@ import math
 import cv2
 import numpy as np
 
+from .rules import iou
+
 DOORWAY_GAP = 120
 MAX_GROUP_AGE = 300
-CROSS_CAMERA_WINDOW = 35
+MAX_PERSON_GROUP_AGE = 600
+CLOSE_TRANSITION = 12
 LABELS = {'person', 'car'}
 
 
-def hint(frame, box):
+def footprint(box):
+    left, _, right, bottom = box
+    return ((left + right) / 2, bottom)
+
+
+def hint(frame, box, entry_box=None):
     """Keep coarse colour and position, without storing another crop or face data."""
     height, width = frame.shape[:2]
     left, top, right, bottom = box
@@ -27,7 +35,8 @@ def hint(frame, box):
         chromatic = (hsv[:, 1] >= 48) & (hsv[:, 2] >= 48)
         bins = np.where(chromatic, hsv[:, 0] // 15, 12 + hsv[:, 2] // 64)
         colors = (np.bincount(bins, minlength=16) / len(hsv)).round(4).tolist()
-    return json.dumps({'point': [(left+right)/2, bottom], 'colors': colors})
+    return json.dumps({'point': footprint(box), 'entry': footprint(entry_box or box),
+                       'box': box, 'colors': colors})
 
 
 def _prepare(row):
@@ -39,14 +48,27 @@ def _prepare(row):
     return result
 
 
-def _appearance(a, b):
-    first, second = a['hint'].get('colors'), b['hint'].get('colors')
-    if not first or not second:
-        return 0
+def _colors(event):
     # Grey or nearly black crops are common and weak evidence between views.
-    if min(sum(first[:12]), sum(second[:12])) < .2:
-        return 0
-    return sum(min(x, y) for x, y in zip(first, second))
+    colors = event['hint'].get('colors')
+    return colors if colors and sum(colors[:12]) >= .2 else None
+
+
+def _appearance(a, b):
+    first, second = _colors(a), _colors(b)
+    return sum(min(x, y) for x, y in zip(first, second)) if first and second else 0
+
+
+def _color_conflict(a, b, similarity):
+    first, second = _colors(a), _colors(b)
+    if not first or not second:
+        return False
+    if similarity < .35:
+        return True
+    first_total, second_total = sum(first[:12]), sum(second[:12])
+    return min(first_total, second_total) >= .30 and sum(
+        min(x / first_total, y / second_total) for x, y in zip(first[:12], second[:12])
+    ) < .32
 
 
 def _plate(a, b):
@@ -59,55 +81,141 @@ def _link(a, b):
     return a['label'], a['camera'], b['camera']
 
 
-def _matches(a, b, patterns):
-    if a['label'] != b['label'] or _plate(a, b) < 0:
-        return None
-    delta = b['start'] - a['start']
-    if a['camera'] == b['camera']:
-        # A moving vehicle event is anchored to motion onset, never parked presence.
-        end = a['last'] if a['label'] == 'person' else a['start']
-        limit = DOORWAY_GAP if a['label'] == 'person' else 18
-        if not 0 <= b['start'] - end <= limit or delta <= 0:
-            return None
-        first, second = a['hint'].get('point'), b['hint'].get('point')
-        if first and second:
-            if math.dist(first, second) > .23:
-                return None
-            return (2, 'Repeated activity in the same area')
-        return (1, 'Timing only on the same camera')
+def _area_distance(a, b):
+    last = (a['last_x'], a['last_y']) if a.get('last_x') is not None and a.get('last_y') is not None else None
+    ends = (a['hint'].get('point'), last)
+    starts = (b['hint'].get('point'), b['hint'].get('entry'))
+    return min((math.dist(end, start) for end in ends if end for start in starts if start), default=None)
 
-    if not 0 <= delta <= CROSS_CAMERA_WINDOW:
+
+def _overlap(a, b):
+    return max(a['start'], b['start']) <= min(a['last'], b['last'])
+
+
+def _track_fragment(a, b):
+    # Only a brief overlap of nearly identical detections can be a split track.
+    # Tight framing plus colour keeps two people side by side from being merged.
+    if not 0 <= a['last'] - b['start'] <= 2.5 or b['start'] - a['start'] < 1:
+        return False
+    first, second = a['hint'].get('point'), b['hint'].get('point')
+    if not first or not second or math.dist(first, second) > .035 or _appearance(a, b) < .76:
+        return False
+    first_box, second_box = a['hint'].get('box'), b['hint'].get('box')
+    return not (first_box and second_box) or iou(first_box, second_box) >= .7
+
+
+def _same_camera(a, b, similarity, plate, disagree):
+    delta = b['start'] - a['start']
+    if delta <= 0:
         return None
-    if _plate(a, b) == 1:
-        return (4, 'Matching plate across cameras')
+    distance = _area_distance(a, b)
+    if a['label'] == 'car':
+        # Compare movement onsets. A parked car can stay tracked for hours.
+        if plate == 1 and delta <= DOORWAY_GAP:
+            return 4, 'Matching plate during repeated movement'
+        if not disagree and delta <= 18 and (distance is None or distance <= .23):
+            return 2 if distance is not None else 1, 'Repeated vehicle movement nearby'
+        if distance is not None and distance <= .12 and delta <= DOORWAY_GAP and similarity >= .78:
+            return 3, 'Similar vehicle moving again in the same area'
+        return None
+    gap = b['start'] - a['last']
+    if gap <= 0:
+        return (3, 'Brief split of the same detection') if _track_fragment(a, b) else None
+    # On the same view a close return to the same spot helps when a change
+    # of pose or lighting shifts the colour histogram.
+    nearby_return = distance is not None and distance <= .10 and similarity >= .35
+    if disagree and not nearby_return:
+        return None
+    if distance is None:
+        return (1, 'Timing only on the same camera') if gap <= DOORWAY_GAP else None
+    if gap <= 20 and distance <= .38 and similarity >= .55:
+        return 3, 'Similar appearance after a short tracking gap'
+    if gap <= 35 and distance <= .38 and similarity >= .65:
+        return 3, 'Similar appearance after a short tracking gap'
+    if gap <= 180 and ((distance <= .18 and similarity >= .74) or (distance <= .08 and similarity >= .62)):
+        return 3, 'Similar appearance on return to the same area'
+    if gap <= DOORWAY_GAP and distance <= .23:
+        return 2, 'Repeated activity in the same area'
+    return None
+
+
+def _on_learned_route(a, b, patterns):
+    first, second = a['hint'].get('point'), b['hint'].get('point')
+    if not first or not second:
+        return False
+    forward = patterns.get(_link(a, b), ())
+    reverse = patterns.get(_link(b, a), ())
+    examples = sorted(
+        list(forward) + [(stamp, delay, end, start) for stamp, delay, start, end in reverse],
+        key=lambda example: example[0],
+    )
+    independent = []
+    for stamp, _, start, end in examples:
+        if start and end and (not independent or stamp - independent[-1][0] >= DOORWAY_GAP):
+            independent.append((stamp, start, end))
+    return len(independent) >= 3 and sum(
+        math.dist(first, start) <= .30 and math.dist(second, end) <= .30
+        for _, start, end in independent
+    ) >= 2
+
+
+def _matches(a, b, patterns):
+    if a['label'] != b['label']:
+        return None
+    if a['start'] > b['start']:
+        a, b = b, a
+    plate = _plate(a, b)
+    if plate < 0:
+        return None
     similarity = _appearance(a, b)
-    learned = patterns.get(_link(a, b), [])
-    if len(learned) >= 3 and similarity >= .66 and any(abs(delta-gap) <= 5 for _, gap in learned):
-        return (3, 'Recurring camera transition with similar appearance')
-    if delta <= 12 and similarity >= .76:
-        return (2, 'Close timing and similar appearance across cameras')
-    if delta <= 12:
-        return (1, 'Timing only across cameras')
+    disagree = _color_conflict(a, b, similarity)
+    if a['camera'] == b['camera']:
+        return _same_camera(a, b, similarity, plate, disagree)
+    delta = b['start'] - a['start']
+    if plate == 1 and delta <= 90:
+        return 4, 'Matching plate across cameras'
+    if disagree:
+        return None
+    if delta <= 35:
+        learned = patterns.get(_link(a, b), ())
+        if len(learned) >= 3 and similarity >= .66 and any(abs(delta-gap) <= 5 for _, gap, _, _ in learned):
+            return 3, 'Recurring camera transition with similar appearance'
+        if similarity >= .68 and (delta <= CLOSE_TRANSITION or (a['hint'].get('point') and b['hint'].get('point'))):
+            return 2, 'Close timing and similar appearance across cameras'
+    if a['label'] == 'car':
+        if delta <= 65 and _on_learned_route(a, b, patterns):
+            return 3, 'Repeated vehicle route across cameras'
+    else:
+        tail = max(0, b['start'] - a['last'])
+        if 35 < delta <= 75 and tail <= 20 and similarity >= .72:
+            return 3, 'Similar appearance near the end of another camera view'
+        plausible_route = (tail <= 90 and similarity >= .50) or (tail <= 120 and similarity >= .82)
+        if delta <= 150 and plausible_route and _on_learned_route(a, b, patterns):
+            return 3, 'Repeated person route with similar appearance'
+    if delta <= CLOSE_TRANSITION:
+        return 1, 'Timing only across cameras'
     return None
 
 
 def _learn(patterns, previous, event):
     if previous['camera'] == event['camera']:
         return
+    if previous['start'] > event['start']:
+        previous, event = event, previous
     delta = event['start'] - previous['start']
-    if not 0 <= delta <= CROSS_CAMERA_WINDOW:
-        return
     plate = _plate(previous, event)
-    if plate < 0 or (plate != 1 and (delta > 12 or _appearance(previous, event) < .82)):
+    limit, minimum = (CLOSE_TRANSITION, .50) if event['label'] == 'car' else (35, .76)
+    if plate < 0 or delta > 90 or (plate != 1 and (delta > limit or _appearance(previous, event) < minimum)):
         return
     observations = patterns[_link(previous, event)]
     if not observations or event['start'] - observations[-1][0] >= DOORWAY_GAP:
-        observations.append((event['start'], delta))
+        observations.append((event['start'], delta, previous['hint'].get('point'), event['hint'].get('point')))
 
 
 def preview(rows, *, limit=12, include_single=False):
+    # Reproduce delivery order even when a later-confirmed track started first.
     events = sorted((_prepare(row) for row in rows if row['label'] in LABELS
-                     and row.get('feedback') != 'false_alarm'), key=lambda e: (e['start'], e['id']))
+                     and row.get('feedback') != 'false_alarm'), key=lambda e: (e['created'], e['id']))
     patterns = defaultdict(list)
     groups = []
     group_keys = {}
@@ -124,17 +232,23 @@ def preview(rows, *, limit=12, include_single=False):
             group.append((event, event.get('activity_reason') or ''))
             continue
         candidates = []
+        limit_age = MAX_PERSON_GROUP_AGE if event['label'] == 'person' else MAX_GROUP_AGE
         for group in reversed(groups):
-            if event['start'] - group[0][0]['start'] > MAX_GROUP_AGE:
+            age = event['created'] - group[0][0]['created']
+            if age > limit_age:
                 break
+            if group[0][0]['label'] != event['label']:
+                continue
             if any(_plate(previous, event) < 0 for previous, _ in group):
                 continue
             if any(previous['camera'] == event['camera'] and previous['label'] == event['label']
-                   and previous['start'] <= event['start'] <= previous['last']
+                   and _overlap(previous, event)
+                   and not _track_fragment(*sorted((previous, event), key=lambda e: e['start']))
                    for previous, _ in group):
                 continue
             matches = [(match, previous) for previous, _ in group
-                       if (match := _matches(previous, event, patterns))]
+                       if (match := _matches(previous, event, patterns))
+                       and (age <= MAX_GROUP_AGE or match[0] >= 3)]
             if matches:
                 match, previous = max(matches, key=lambda pair: (pair[0][0], pair[1]['start']))
                 candidates.append((match, previous, group))

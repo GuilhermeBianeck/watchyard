@@ -88,3 +88,86 @@ def test_group_delivers_once_per_telegram_account_and_allows_failed_first_send(t
     service.notifications.deliver_once(service.store)
     assert len(calls) == 3
     assert service.store.event(third)['status'] == 'grouped'
+
+
+def test_confirmation_order_respects_an_existing_group_even_when_second_track_started_first():
+    color = [1.0] + [0.0]*15
+    known = event('delivered', 6, 109, end=111, point=[.4, .7], colors=color, activity_group='delivered')
+    next_view = event('confirmed later', 12, 100, end=114, point=[.6, .8], colors=color)
+    next_view['created'] = 114
+    [group] = preview([next_view, known])
+    assert group['id'] == 'delivered'
+    assert [item['id'] for item in group['events']] == ['delivered', 'confirmed later']
+
+
+def test_matches_person_across_a_longer_transition_with_color_but_keeps_different_people_apart():
+    blue = [1.0] + [0.0]*15
+    green = [0.0, 1.0] + [0.0]*14
+    origin = event('first', 5, 100, end=124, point=[.2, .7], colors=blue)
+    same_person = event('same', 9, 113, point=[.8, .4], colors=blue)
+    other_person = event('other', 10, 115, point=[.5, .5], colors=green)
+    [group] = preview([origin, same_person, other_person])
+    assert [item['id'] for item in group['events']] == ['first', 'same']
+    # With no corroboration, the longer window does not group based on timing.
+    assert not preview([origin, event('unknown', 9, 114, point=[.8, .4])])
+
+
+def test_handoff_uses_end_position_and_fragment_must_have_nearly_identical_boxes():
+    blue = [1.0] + [0.0]*15
+    walking = event('first', 5, 100, end=129, point=[.2, .7], colors=blue, last_x=.7, last_y=.8)
+    returned = event('return', 5, 175, point=[.7, .8], colors=blue)
+    assert preview([walking, returned])[0]['id'] == 'first'
+
+    first = event('first', 5, 100, end=110.3, point=[.35, .7], colors=blue)
+    fragment = event('fragment', 5, 108, end=115, point=[.36, .7], colors=blue)
+    for record, box in [(first, [.3, .4, .4, .7]), (fragment, [.31, .4, .41, .7])]:
+        hint = json.loads(record['correlation_hint'])
+        record['correlation_hint'] = json.dumps({**hint, 'box': box})
+    assert preview([first, fragment])[0]['id'] == 'first'
+    hint = json.loads(fragment['correlation_hint'])
+    fragment['correlation_hint'] = json.dumps({**hint, 'box': [.26, .2, .46, .7]})
+    assert not preview([first, fragment])
+
+
+def test_vehicle_route_learns_from_separate_corroborated_trips_and_accepts_ir_views():
+    blue = [1.0] + [0.0]*15
+    infrared = [0.0]*15 + [1.0]
+    points = [.4, .43], [.3, .8]
+    confirmed = []
+    for i, stamp in enumerate((100, 500, 900)):
+        confirmed.extend([
+            event(f'a{i}', 24, stamp, label='car', point=points[0], colors=blue),
+            event(f'b{i}', 91, stamp+5, label='car', point=points[1], colors=blue),
+        ])
+    vehicle = event('night', 24, 1500, label='car', point=[.46, .49], colors=infrared, plate='AB-12-CD')
+    later = event('night second view', 91, 1533, label='car', point=[.31, .96], colors=infrared)
+    assert all(g['id'] != 'night' for g in preview(confirmed[:4] + [vehicle, later]))
+    [group] = preview(confirmed + [vehicle, later], limit=1)
+    assert group['id'] == 'night'
+    assert group['events'][-1]['reason'] == 'Repeated vehicle route across cameras'
+    later['plate'] = 'XY-12-ZZ'
+    assert all(g['id'] != 'night' for g in preview(confirmed + [vehicle, later]))
+    later['plate'] = None
+    later['correlation_hint'] = json.dumps({'point': [.88, .32], 'colors': infrared})
+    assert all(g['id'] != 'night' for g in preview(confirmed + [vehicle, later]))
+
+
+def test_multiple_equally_plausible_matches_stay_separate():
+    color = [1.0] + [0.0]*15
+    rows = [
+        event('one', 2, 100, end=115, colors=color, point=[.4, .6]),
+        event('two', 2, 103, end=117, colors=color, point=[.5, .7]),
+        event('ambiguous', 9, 114, colors=color, point=[.3, .6]),
+    ]
+    assert not preview(rows)
+
+
+def test_only_corroborated_person_groups_continue_after_five_minutes():
+    point = [.4, .6]
+    color = [1.0] + [0.0]*15
+    rows = [event(str(i), 2, i, colors=color, point=point) for i in (100, 245, 390, 535, 680, 825)]
+    groups = preview(rows, include_single=True)
+    assert [e['id'] for e in groups[-1]['events']] == ['100', '245', '390', '535', '680']
+    assert groups[0]['id'] == '825'
+    no_color = [event(str(i), 2, i, point=point) for i in (100, 190, 280, 370, 460)]
+    assert [e['id'] for e in preview(no_color, include_single=True)[-1]['events']] == ['100', '190', '280', '370']

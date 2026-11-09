@@ -2,12 +2,14 @@
 
 ## Current status
 
-Watchyard 0.8.10 is in a local field pilot on an Apple Silicon Mac. The four
+Watchyard 0.8.11 is in a local field pilot on an Apple Silicon Mac. The four
 installed cameras use shared ingest and a 1 fps analysis target, with live
 viewing up to 10 fps. The recorder handles continuous recording. The dashboard
 provides live views, event history, adaptive replays and saved clips. Telegram
 delivers one alert per activity group per account and links to both the replay
-and the related camera views.
+and the related camera views. Grouping now uses confirmation order, trajectory
+endpoints and recurring routes. Camera outages and recoveries that happen close
+together send one health summary per phase and destination.
 
 Fresh installs can create the owner account in the local dashboard.
 Incident simulation can record local review decisions using manual presence and

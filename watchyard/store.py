@@ -1,7 +1,12 @@
+import json
 import sqlite3
 import threading
 import time
 import uuid
+
+from .health import (
+    COALESCE_SECONDS, OUTAGE, OUTAGE_SECONDS, RECOVERY, RECOVERY_SECONDS, REPORT_UNDELIVERED_AFTER, camera_message,
+)
 
 
 class Store:
@@ -18,7 +23,7 @@ class Store:
             label TEXT, confidence REAL, snapshot TEXT, status TEXT,
             attempts INTEGER DEFAULT 0, next_try REAL DEFAULT 0, detail TEXT DEFAULT '')""")
         columns={r[1] for r in self.db.execute('PRAGMA table_info(events)')}
-        for name,definition in [('feedback',"TEXT DEFAULT 'unreviewed'"),('sent_at','REAL'),('notify_mode',"TEXT DEFAULT ''"),('first_seen','REAL'),('last_seen','REAL'),('plate','TEXT'),('correlation_hint','TEXT'),('activity_group','TEXT'),('activity_reason','TEXT')]:
+        for name,definition in [('feedback',"TEXT DEFAULT 'unreviewed'"),('sent_at','REAL'),('notify_mode',"TEXT DEFAULT ''"),('first_seen','REAL'),('last_seen','REAL'),('plate','TEXT'),('correlation_hint','TEXT'),('activity_group','TEXT'),('activity_reason','TEXT'),('last_x','REAL'),('last_y','REAL')]:
             if name not in columns:
                 self.db.execute(f'ALTER TABLE events ADD COLUMN {name} {definition}')
         self.db.execute("CREATE TABLE IF NOT EXISTS recipient_deliveries (event_id TEXT,recipient TEXT,status TEXT DEFAULT 'pending',attempts INTEGER DEFAULT 0,next_try REAL DEFAULT 0,sent_at REAL,error TEXT DEFAULT '',created REAL,PRIMARY KEY(event_id,recipient))")
@@ -31,6 +36,20 @@ class Store:
             outcome TEXT NOT NULL, reason TEXT NOT NULL, zone TEXT NOT NULL,
             observations INTEGER NOT NULL, dwell_seconds REAL NOT NULL)""")
         self.db.execute('CREATE INDEX IF NOT EXISTS incident_assessed_at ON incident_assessments(assessed_at DESC)')
+        for table, additions in {
+            'health_state': [('outage_id', 'TEXT'), ('outage_since', 'REAL')],
+            'health_outbox': [('camera_changes', 'TEXT')],
+            'recipient_deliveries': [('coverage', 'TEXT')],
+        }.items():
+            existing = {row['name'] for row in self.db.execute(f'PRAGMA table_info({table})')}
+            for column, definition in additions:
+                if column not in existing:
+                    self.db.execute(f'ALTER TABLE {table} ADD COLUMN {column} {definition}')
+                    if column == 'camera_changes':
+                        self.db.execute("""
+                            UPDATE health_outbox SET status='superseded'
+                            WHERE status='pending' AND key GLOB 'camera-[0-9]*'
+                            """)
         self.db.commit()
 
     def add(self,camera,label,confidence,snapshot,status='pending',detail='',notify_mode='',*,first_seen=None,last_seen=None,correlation_hint=None):
@@ -40,12 +59,16 @@ class Store:
             self.db.commit()
         return key
 
-    def extend_observations(self, event_ids, seen):
+    def extend_observations(self, event_ids, seen, *, footprints=None):
         if not event_ids:
             return
+        footprints = footprints or {}
         with self.lock:
-            self.db.executemany('UPDATE events SET last_seen=? WHERE id=? AND last_seen<?',
-                                [(seen, key, seen) for key in event_ids])
+            self.db.executemany(
+                'UPDATE events SET last_seen=?, last_x=COALESCE(?,last_x), last_y=COALESCE(?,last_y) '
+                'WHERE id=? AND last_seen<?',
+                [(seen, *footprints.get(key, (None, None)), key, seen) for key in event_ids],
+            )
             self.db.commit()
 
     def save_incident_assessment(self, event_id, assessed_at, presence, outcome, reason, zone, observations, dwell_seconds):
@@ -75,12 +98,14 @@ class Store:
                             (plate, event_id))
             self.db.commit()
 
-    def correlation_events(self):
+    def correlation_events(self, *, before=None):
+        now = time.time()
         with self.lock:
             return [dict(row) for row in self.db.execute(
-                "SELECT id,created,camera,camera_name,label,first_seen,last_seen,feedback,plate,correlation_hint,activity_group,activity_reason "
-                "FROM events WHERE created>=? AND label IN ('person','car') ORDER BY created DESC LIMIT 240",
-                (time.time()-7*86400,))]
+                "SELECT id,created,camera,camera_name,label,first_seen,last_seen,feedback,plate,correlation_hint,"
+                "activity_group,activity_reason,last_x,last_y FROM events WHERE created>=? AND created<=? "
+                "AND label IN ('person','car') ORDER BY created DESC,id DESC LIMIT 480",
+                (now-7*86400, now if before is None else before))]
 
     def assign_activity_group(self, event_id, group_id, reason):
         with self.lock:
@@ -160,6 +185,79 @@ class Store:
                 self.db.execute('UPDATE health_state SET announced=1 WHERE key=?',(key,))
             self.db.commit()
 
+    def observe_cameras(self, observations, now=None):
+        now = time.time() if now is None else now
+        outages, recoveries = {}, {}
+        with self.lock, self.db:
+            self.db.execute('BEGIN IMMEDIATE')
+            for camera_id, name, healthy in observations:
+                key = 'camera-' + str(camera_id)
+                row = self.db.execute('SELECT * FROM health_state WHERE key=?', (key,)).fetchone()
+                if row is None:
+                    self.db.execute('INSERT INTO health_state (key,name,healthy,changed) VALUES (?,?,?,?)',
+                                    (key, name, healthy, now))
+                elif healthy != row['healthy']:
+                    self.db.execute('UPDATE health_state SET name=?,healthy=?,changed=? WHERE key=?',
+                                    (name, healthy, now, key))
+                elif not healthy and row['outage_id'] is None and now - row['changed'] >= OUTAGE_SECONDS:
+                    outages[key] = {'name': name, 'since': row['changed']}
+                elif healthy and row['outage_id'] and now - row['changed'] >= RECOVERY_SECONDS:
+                    recoveries[key] = {
+                        'name': name, 'outage': row['outage_id'], 'recovered_at': row['changed'],
+                        'duration': int(row['changed'] - row['outage_since']),
+                    }
+            if outages:
+                batch = self._queue_camera_health(OUTAGE, outages, now)
+                self.db.executemany('UPDATE health_state SET outage_id=?,outage_since=? WHERE key=?',
+                                    [(batch, item['since'], key) for key, item in outages.items()])
+            if recoveries:
+                self._queue_camera_health(RECOVERY, recoveries, now)
+                self.db.executemany('UPDATE health_state SET outage_id=NULL,outage_since=NULL WHERE key=?',
+                                    [(key,) for key in recoveries])
+
+    def _queue_camera_health(self, kind, changes, now):
+        batch = self.db.execute("""
+            SELECT id,camera_changes FROM health_outbox
+            WHERE key=? AND status='pending' AND created>? AND camera_changes IS NOT NULL
+            ORDER BY created DESC LIMIT 1
+            """, (kind, now - COALESCE_SECONDS)).fetchone()
+        if batch:
+            combined = json.loads(batch['camera_changes']) | changes
+            self.db.execute('UPDATE health_outbox SET body=?,camera_changes=? WHERE id=?',
+                            (camera_message(kind, combined), json.dumps(combined), batch['id']))
+            return batch['id']
+        key = uuid.uuid4().hex
+        self.db.execute("""
+            INSERT INTO health_outbox (id,key,created,body,next_try,camera_changes) VALUES (?,?,?,?,?,?)
+            """, (key, kind, now, camera_message(kind, changes), now + COALESCE_SECONDS, json.dumps(changes)))
+        return key
+
+    def camera_health_changes(self, event, recipient):
+        changes = json.loads(event['camera_changes'])
+        with self.lock:
+            active = {row['key']: row for row in self.db.execute(
+                "SELECT * FROM health_state WHERE key LIKE 'camera-%'")}
+            if event['key'] == OUTAGE:
+                current = {key: item for key, item in changes.items()
+                           if key in active and active[key]['outage_id'] == event['id']}
+                if current and all(active[key]['healthy'] for key in current):
+                    # Wait for recovery to settle before reporting an outage
+                    # that may have ended during the batching window.
+                    return None
+                return current
+            eligible = {}
+            for key, item in changes.items():
+                row = active.get(key)
+                if not row or not row['healthy'] or row['changed'] != item['recovered_at']:
+                    continue
+                receipt = self.db.execute("""
+                    SELECT coverage,attempts FROM recipient_deliveries WHERE event_id=? AND recipient=?
+                    """, ('health:' + item['outage'], recipient)).fetchone()
+                if receipt and (key in json.loads(receipt['coverage'] or '[]')
+                                or (receipt['attempts'] and item['duration'] >= REPORT_UNDELIVERED_AFTER)):
+                    eligible[key] = item
+            return eligible
+
     def _queue_health(self,key,body,now):
         self.db.execute('INSERT INTO health_outbox (id,key,created,body) VALUES (?,?,?,?)',(uuid.uuid4().hex,key,now,body))
 
@@ -167,9 +265,10 @@ class Store:
         with self.lock:
             return [dict(r) for r in self.db.execute("SELECT * FROM health_outbox WHERE status='pending' AND next_try<=? ORDER BY created LIMIT 4",(time.time(),))]
 
-    def mark_health(self,key,sent,retry_in=15):
+    def mark_health(self,key,status,retry_in=15):
         with self.lock:
-            self.db.execute('UPDATE health_outbox SET status=?,attempts=attempts+1,next_try=? WHERE id=?',('sent' if sent else 'pending',time.time()+retry_in,key))
+            self.db.execute("UPDATE health_outbox SET status=?,attempts=attempts+1,next_try=? WHERE id=? AND status='pending'",
+                            (status,time.time()+retry_in,key))
             self.db.commit()
 
     def ensure_recipients(self,event_id,recipients):
@@ -184,9 +283,14 @@ class Store:
         with self.lock:
             return [dict(r) for r in self.db.execute('SELECT * FROM recipient_deliveries WHERE event_id=?',(event_id,))]
 
-    def recipient_result(self,event_id,recipient,status,error='',retry_in=0):
+    def recipient_result(self,event_id,recipient,status,error='',retry_in=0,*,coverage=None):
         with self.lock:
-            self.db.execute("UPDATE recipient_deliveries SET status=?,attempts=attempts+CASE WHEN ? IN ('pending','sent') THEN 1 ELSE 0 END,next_try=?,sent_at=CASE WHEN ?='sent' THEN ? ELSE sent_at END,error=? WHERE event_id=? AND recipient=?",(status,status,time.time()+retry_in,status,time.time(),error,event_id,recipient))
+            self.db.execute("""
+                UPDATE recipient_deliveries SET status=?,attempts=attempts+CASE WHEN ? IN ('pending','sent') THEN 1 ELSE 0 END,
+                next_try=?,sent_at=CASE WHEN ?='sent' THEN ? ELSE sent_at END,error=?,coverage=?
+                WHERE event_id=? AND recipient=?
+                """, (status,status,time.time()+retry_in,status,time.time(),error,
+                      json.dumps(coverage) if coverage is not None else None,event_id,recipient))
             self.db.commit()
 
     def cleanup(self,days):

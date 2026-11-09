@@ -1,29 +1,41 @@
 # Activity groups
 
-Open **Activity → Activity groups** to review which person and vehicle
-events may belong together. Each entry shows its camera, time and reason. Use
-the camera button to open that event's replay. Telegram sends one alert per group to each account. An account is only skipped
-after Telegram accepted a different event in that group for that account.
-Every event keeps its own recording and entry in Activity. The first alert
-is sent without waiting for another event. Other providers keep their normal
-delivery behavior.
+Open **Activity → Activity groups** to see related person and vehicle events.
+Each entry shows its camera, time and reason and links to that view's replay.
+Telegram sends one alert per group to each account. A repeat is skipped only
+after Telegram accepted another event from that group for the same account.
+Every camera event keeps its own recording. The first alert can be sent as soon
+as detection is confirmed. Pushover and custom webhooks still deliver camera
+events individually.
 
-Watchyard examines up to 240 recent person and vehicle events from the past
-seven days. On one camera, it looks for repeated activity in the same part
-of the image. Person activity can continue after a gap of up to two minutes,
-with groups capped at five minutes. Overlapping tracks on the same camera stay separate. Vehicle correlation uses the time that movement was
-confirmed, so a parked track cannot extend a group through its presence.
+Watchyard considers up to 480 recent person and vehicle events from the past
+seven days. It forms groups in confirmation order and uses the observed start
+and end times for matching. A camera that confirms a person later can join an
+already delivered group even if it started tracking that person earlier.
 
-Across cameras, Watchyard considers close timing, coarse color similarity
-and agreement between available plate readings. Conflicting plates block a
-merge. It can learn directional camera relationships from repeated, separated
-matches with stronger evidence. The engine learns from recent history and requires no configured camera pairs.
-Group assignments are saved when delivery is first attempted. It stores coarse color and position
-with new events, without a separate crop or face data. When stronger cues are missing, close timing can still group events and suppress
-a repeat Telegram alert. Timing-only groups are weaker and cannot train camera
-relationships. Similar clothing or vehicle color can still yield a mistaken
-suggestion. In a tie between candidate groups, the event stays separate.
+- **Same camera.** Compare the last observed position with where the next
+  track began, along with its position and coarse colour at confirmation.
+  Look for returns to the same area or a short tracking gap along the path.
+  Overlapping people stay separate except for very brief overlaps with
+  near-identical detections, which can be treated as track fragments.
+- **Across cameras.** Similar appearance supports longer transitions.
+  Repeated, independently corroborated transitions can establish a route
+  based on positions in both views, without preconfigured camera pairs.
+  A learned vehicle route can bridge a visible-light view and an infrared
+  view. Timing alone supports only close transitions and cannot train a route.
+- **Limits.** Ordinary groups are capped at five minutes. Repeated strong
+  matches can continue a person group for up to ten minutes. Vehicles are
+  anchored to confirmed movement so a parked car cannot extend the window.
+  Conflicting plates and equally plausible competing groups keep events separate.
 
-When reviewing Activity, an event shown as **Added to existing alert** was
-saved but did not send another Telegram message. Late-arriving cues can help
-future matches but cannot undo a delivery decision already made.
+New events retain normalized positions, a box and coarse colour histograms
+for correlation. Correlation uses existing detection frames and requires
+neither a separate image crop on disk nor a separate model. Similar clothing
+or vehicles can still produce mistaken matches. Existing group IDs and replay
+links are retained. New assignments are saved when Telegram delivery is first
+attempted.
+
+Activity shows **Added to existing alert** when a repeat is saved without
+sending another Telegram notification. For a field check, compare the first
+notification and related replays with a known walk or drive. Include two
+different people or vehicles arriving close together to measure mistaken merges.

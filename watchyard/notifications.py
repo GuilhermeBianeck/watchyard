@@ -6,13 +6,14 @@ import json
 import threading
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from urllib.parse import urlsplit
 
 import requests
 
 from .policy import decision
 from .correlation import LABELS, preview
+from .health import camera_message
 from .telegram import Telegram, TelegramAPIError, keyboard
 
 
@@ -178,7 +179,7 @@ class Notifications:
         if failures:
             raise RuntimeError(f'Test accepted by {sent} destination(s); failed: '+', '.join(sorted(failures)))
 
-    def attempt(self, store, key, targets, notice, image=None, *, activity_group=None):
+    def attempt(self, store, key, targets, notice, image=None, *, activity_group=None, camera_batch=None):
         store.ensure_recipients(key, [{'id': target} for target in targets])
         for d in store.recipient_deliveries(key):
             if d['status'] != 'pending':
@@ -194,9 +195,20 @@ class Notifications:
                     and store.activity_delivered(activity_group, key, d['recipient'])):
                 store.recipient_result(key, d['recipient'], 'grouped')
                 continue
+            coverage = None
+            outbound = notice
+            if camera_batch:
+                changes = store.camera_health_changes(camera_batch, d['recipient'])
+                if changes is None:
+                    continue
+                if not changes:
+                    store.recipient_result(key, d['recipient'], 'cancelled')
+                    continue
+                coverage = list(changes)
+                outbound = replace(notice, message=camera_message(camera_batch['key'], changes))
             try:
-                provider.send(address, notice, image)
-                store.recipient_result(key, d['recipient'], 'sent')
+                provider.send(address, outbound, image)
+                store.recipient_result(key, d['recipient'], 'sent', coverage=coverage)
             except (RuntimeError, OSError) as exc:
                 error = str(exc) if isinstance(exc, RuntimeError) else 'Snapshot unavailable'
                 if provider is self.telegram and hasattr(self.bot, 'last_delivery_error'):
@@ -215,7 +227,7 @@ class Notifications:
             return None
         if event['activity_group']:
             return event['activity_group']
-        history = [row for row in store.correlation_events() if row['created'] <= event['created']]
+        history = store.correlation_events(before=event['created'])
         for group in preview(history, limit=None, include_single=True):
             for member in group['events']:
                 if member['id'] == event['id']:
@@ -274,13 +286,18 @@ class Notifications:
         targets = self.targets()
         for event in store.pending_health():
             key = 'health:'+event['id']
+            batch = event if event['camera_changes'] else None
             message = event['body']
-            if time.time()-event['created'] > 60:
+            if not batch and time.time()-event['created'] > 60:
                 message += '\nQueued at '+time.strftime('%d %b %H:%M:%S %Z', time.localtime(event['created']))+'. Delivery was delayed.'
             notice = Notice('health', event['id'], event['created'], message, True)
-            results = self.attempt(store, key, targets, notice)
-            if results:
-                store.mark_health(event['id'], not any(d['status']=='pending' for d in results), retry_in=15)
+            results = self.attempt(store, key, targets, notice, camera_batch=batch)
+            waiting = [d['next_try'] for d in results if d['status']=='pending']
+            if waiting:
+                store.mark_health(event['id'], 'pending', retry_in=max(15, min(waiting)-time.time()))
+            elif results or batch:
+                status = 'sent' if any(d['status']=='sent' for d in results) else 'superseded'
+                store.mark_health(event['id'], status)
 
     def start(self, store, stop):
         def work():

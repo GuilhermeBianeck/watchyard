@@ -41,11 +41,23 @@ before this release have no recorded send time and are excluded from delay
 statistics. Samples are collected once a minute; peak process memory includes
 the detector and FFmpeg processes, not all GPU/Neural Engine/system allocations.
 
-Camera outages are debounced, stored in SQLite and sent silently through a durable
-queue. A recovered camera supersedes an unsent stale offline notice. Network
-failures retry with backoff. Detection-event notifications expire after three
-minutes; pictures remain in local history. Ambiguous network failures can produce
-a duplicate notification because Telegram does not provide an idempotency key.
+Camera health notices are stored in SQLite and sent silently. Watchyard confirms
+an outage after 45 seconds of unhealthy observations and a recovery after 30
+seconds of healthy observations. Each phase collects nearby camera transitions
+for 30 seconds and lists the affected cameras in one message per destination.
+A camera that fails later still generates its own alert. Current camera state
+is visible in the dashboard during collection.
+
+Retries include only cameras still in the relevant state. A destination gets
+a recovery for cameras it was told were offline. If delivery was attempted
+but failed during an outage of ten minutes or longer, the destination can get
+one recovery summary when connectivity returns. Short outages that end before
+delivery can stay in local history. Service watchdog notices are tracked
+separately.
+
+Network failures retry with backoff. Detection-event notifications expire after
+three minutes; pictures remain in local history. An ambiguous network response
+can still produce a duplicate if Telegram accepted a request before it timed out.
 
 An independent LaunchAgent checks dashboard/detector health. It can report service
 failures while the Mac is running and internet is available. It cannot report a

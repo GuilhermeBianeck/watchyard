@@ -18,7 +18,7 @@ from .runtime import Runtime
 from .replay import Clips
 from .live import Live
 from .plates import Plates
-from .correlation import hint as correlation_hint
+from .correlation import footprint, hint as correlation_hint
 from .incidents import IncidentSimulation
 
 log = logging.getLogger('watchyard')
@@ -128,13 +128,16 @@ class Service:
         tracker = self.trackers[camera_config['id']]
         observed = time.monotonic()
         events = tracker.update(detections,observed,camera_config['zone'],config['confirmation_frames'],window=window)
+        observed_tracks = [track for track in tracker.tracks.values() if track.event_id and track.last == observed]
         self.store.extend_observations(
-            [track.event_id for track in tracker.tracks.values()
-             if track.event_id and track.last == observed], captured)
+            [track.event_id for track in observed_tracks], captured,
+            footprints={track.event_id: footprint(track.box) for track in observed_tracks if track.label == 'person'},
+        )
         for event in events:
             track = tracker.tracks[event['track_id']]
             first_seen = captured - (observed - track.first)
-            track.event_id = self.record(camera_config,frame,event,config,first_seen=first_seen,last_seen=captured)
+            track.event_id = self.record(camera_config,frame,event,config,first_seen=first_seen,last_seen=captured,
+                                         entry_box=track.first_box)
         self.incidents.observe(camera_config, tracker.tracks, config, observed, captured)
 
     def ready(self):
@@ -161,7 +164,7 @@ class Service:
             not camera.analysis_error and now - camera.detected_at < 45 for camera in online
         )
 
-    def record(self, camera, frame, event, config, *, first_seen=None, last_seen=None):
+    def record(self, camera, frame, event, config, *, first_seen=None, last_seen=None, entry_box=None):
         image = frame.copy()
         draw_detection(image,event)
         name = uuid.uuid4().hex+'.jpg'
@@ -177,7 +180,7 @@ class Service:
         activity_hint = None
         if event['label'] in ('person', 'car'):
             try:
-                activity_hint = correlation_hint(frame, event['box'])
+                activity_hint = correlation_hint(frame, event['box'], entry_box if event['label'] == 'person' else None)
             except (cv2.error, ValueError):
                 log.debug('Activity cues unavailable for camera %s', camera['id'])
         event_id = self.store.add(camera,event['label'],event['confidence'],name,status,reason,mode,
@@ -232,12 +235,14 @@ class Service:
                 last_sample = now
             if now-self.started < 60:
                 continue
-            for camera_id,camera in self.cameras.items():
-                config = self.camera_config(camera_id)
+            observations = []
+            for config in self.settings.snapshot()['cameras']:
+                camera = self.cameras[config['id']]
                 healthy = now - camera.captured_at < 30
                 if config['enabled'] and self.model is not None:
                     healthy = healthy and not camera.analysis_error and now - camera.detected_at < 45
-                self.store.observe_health('camera-'+str(camera_id), config['name'], healthy)
+                observations.append((camera.id, config['name'], healthy))
+            self.store.observe_cameras(observations, now)
 
     def close(self):
         self.stop.set()

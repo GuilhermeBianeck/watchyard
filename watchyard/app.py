@@ -313,6 +313,8 @@ def create_app(service=None, run_service=True):
 
     def public_event(event, owner):
         event.pop('correlation_hint', None)
+        event.pop('last_x', None)
+        event.pop('last_y', None)
         if not owner:
             event.pop('plate', None)
         elif event.get('plate'):
