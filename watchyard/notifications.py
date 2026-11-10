@@ -179,7 +179,7 @@ class Notifications:
         if failures:
             raise RuntimeError(f'Test accepted by {sent} destination(s); failed: '+', '.join(sorted(failures)))
 
-    def attempt(self, store, key, targets, notice, image=None, *, activity_group=None, camera_batch=None):
+    def attempt(self, store, key, targets, notice, image=None, *, activity_group=None, episode_id=None, camera_batch=None):
         store.ensure_recipients(key, [{'id': target} for target in targets])
         for d in store.recipient_deliveries(key):
             if d['status'] != 'pending':
@@ -192,7 +192,7 @@ class Notifications:
                 continue
             provider, address = target
             if (activity_group and provider is self.telegram
-                    and store.activity_delivered(activity_group, key, d['recipient'])):
+                    and store.activity_delivered(activity_group, key, d['recipient'], episode_id, audible=not notice.silent)):
                 store.recipient_result(key, d['recipient'], 'grouped')
                 continue
             coverage = None
@@ -208,7 +208,8 @@ class Notifications:
                 outbound = replace(notice, message=camera_message(camera_batch['key'], changes))
             try:
                 provider.send(address, outbound, image)
-                store.recipient_result(key, d['recipient'], 'sent', coverage=coverage)
+                audible = not outbound.silent if outbound.event and provider is self.telegram else None
+                store.recipient_result(key, d['recipient'], 'sent', coverage=coverage, audible=audible)
             except (RuntimeError, OSError) as exc:
                 error = str(exc) if isinstance(exc, RuntimeError) else 'Snapshot unavailable'
                 if provider is self.telegram and hasattr(self.bot, 'last_delivery_error'):
@@ -264,9 +265,10 @@ class Notifications:
             group = self.group_for(store, event) if any(
                 provider is self.telegram for provider, _ in targets.values()
             ) else None
+            episode = store.episode_for(key, group) if group else None
             results = self.attempt(store, key, targets, notice,
                                    lambda: (self.settings.path/'events'/event['snapshot']).read_bytes(),
-                                   activity_group=group)
+                                   activity_group=group, episode_id=episode)
             waiting = [d for d in results if d['status']=='pending']
             telegram_waiting = [d for d in waiting if targets[d['recipient']][0] is self.telegram]
             self.bot.last_delivery_error = telegram_waiting[0]['error'] if telegram_waiting else None

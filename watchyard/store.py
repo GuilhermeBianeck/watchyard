@@ -37,10 +37,10 @@ class Store:
             observations INTEGER NOT NULL, dwell_seconds REAL NOT NULL)""")
         self.db.execute('CREATE INDEX IF NOT EXISTS incident_assessed_at ON incident_assessments(assessed_at DESC)')
         for table, additions in {
-            'events': [('recent_colors', 'TEXT'), ('last_motion', 'REAL')],
+            'events': [('recent_colors', 'TEXT'), ('last_motion', 'REAL'), ('episode_id', 'TEXT')],
             'health_state': [('outage_id', 'TEXT'), ('outage_since', 'REAL')],
             'health_outbox': [('camera_changes', 'TEXT')],
-            'recipient_deliveries': [('coverage', 'TEXT')],
+            'recipient_deliveries': [('coverage', 'TEXT'), ('audible', 'INTEGER')],
         }.items():
             existing = {row['name'] for row in self.db.execute(f'PRAGMA table_info({table})')}
             for column, definition in additions:
@@ -51,6 +51,7 @@ class Store:
                             UPDATE health_outbox SET status='superseded'
                             WHERE status='pending' AND key GLOB 'camera-[0-9]*'
                             """)
+        self.db.execute('CREATE INDEX IF NOT EXISTS events_episode ON events(episode_id,created)')
         self.db.commit()
 
     def add(self,camera,label,confidence,snapshot,status='pending',detail='',notify_mode='',*,first_seen=None,last_seen=None,correlation_hint=None,last_motion=None):
@@ -124,12 +125,65 @@ class Store:
             row = self.db.execute('SELECT activity_group FROM events WHERE id=?', (event_id,)).fetchone()
             return row[0] if row else None
 
-    def activity_delivered(self, group_id, event_id, recipient):
+    def episode_for(self, event_id, group_id):
+        from .episodes import MAX_EPISODE_SECONDS, related_episode
+
+        with self.lock, self.db:
+            event = dict(self.db.execute('SELECT * FROM events WHERE id=?', (event_id,)).fetchone())
+            if event['episode_id']:
+                return event['episode_id']
+            known = self.db.execute(
+                'SELECT episode_id FROM events WHERE activity_group=? AND episode_id IS NOT NULL LIMIT 1',
+                (group_id,),
+            ).fetchone()
+            if known:
+                episode = known[0]
+            else:
+                # Include recent participants and their episode's vehicle groups,
+                # even if the vehicle appeared on another camera.
+                history = [dict(row) for row in self.db.execute("""
+                    SELECT * FROM events WHERE episode_id IN (
+                        SELECT seed.episode_id FROM events seed
+                        WHERE seed.camera=? AND seed.created BETWEEN ? AND ? AND seed.episode_id IS NOT NULL
+                        AND NOT EXISTS (SELECT 1 FROM events anchor
+                                        WHERE anchor.episode_id=seed.episode_id AND anchor.created<?)
+                    ) AND created<=? AND feedback!='false_alarm'
+                    ORDER BY created DESC LIMIT 120
+                    """, (event['camera'], event['created']-75, event['created'],
+                          event['created']-MAX_EPISODE_SECONDS, event['created']))]
+                episode = related_episode(event, history) or group_id
+            self.db.execute('UPDATE events SET episode_id=? WHERE id=?', (episode, event_id))
+            return episode
+
+    def episode_previews(self, requested=None):
+        with self.lock:
+            ids = [requested] if requested else [row[0] for row in self.db.execute("""
+                SELECT episode_id FROM events WHERE episode_id IS NOT NULL AND feedback!='false_alarm'
+                GROUP BY episode_id HAVING count(*)>1 ORDER BY max(created) DESC LIMIT 12
+                """)]
+            result = []
+            for episode in ids:
+                rows = self.db.execute("""
+                    SELECT id,camera_name,created,label,activity_group,activity_reason FROM events
+                    WHERE (episode_id=? OR (episode_id IS NULL AND (id=? OR activity_group=?)))
+                    AND feedback!='false_alarm' ORDER BY created,id
+                    """, (episode, episode, episode)).fetchall()
+                if rows:
+                    labels = {row['label'] for row in rows}
+                    result.append({'id': episode, 'label': rows[0]['label'] if len(labels)==1 else 'mixed',
+                                   'events': [{'id': row['id'], 'camera_name': row['camera_name'],
+                                               'created': row['created'],
+                                               'reason': row['activity_reason'] or (
+                                                   'Same activity episode' if row['activity_group'] != episode else ''
+                                               )} for row in rows]})
+            return result
+
+    def activity_delivered(self, group_id, event_id, recipient, episode_id=None, *, audible=False):
         with self.lock:
             return self.db.execute(
                 "SELECT 1 FROM events e JOIN recipient_deliveries d ON d.event_id=e.id "
-                "WHERE (e.activity_group=? OR e.id=?) AND e.id!=? AND e.feedback!='false_alarm' AND d.recipient=? AND d.status='sent' LIMIT 1",
-                (group_id, group_id, event_id, recipient),
+                "WHERE (e.activity_group=? OR e.id=? OR e.episode_id=?) AND e.id!=? AND e.feedback!='false_alarm' AND d.recipient=? AND d.status='sent' AND (?=0 OR COALESCE(d.audible,1)=1) LIMIT 1",
+                (group_id, group_id, episode_id, event_id, recipient, audible),
             ).fetchone() is not None
 
     def recent(self,limit=50):
@@ -291,14 +345,14 @@ class Store:
         with self.lock:
             return [dict(r) for r in self.db.execute('SELECT * FROM recipient_deliveries WHERE event_id=?',(event_id,))]
 
-    def recipient_result(self,event_id,recipient,status,error='',retry_in=0,*,coverage=None):
+    def recipient_result(self,event_id,recipient,status,error='',retry_in=0,*,coverage=None,audible=None):
         with self.lock:
             self.db.execute("""
                 UPDATE recipient_deliveries SET status=?,attempts=attempts+CASE WHEN ? IN ('pending','sent') THEN 1 ELSE 0 END,
-                next_try=?,sent_at=CASE WHEN ?='sent' THEN ? ELSE sent_at END,error=?,coverage=?
+                next_try=?,sent_at=CASE WHEN ?='sent' THEN ? ELSE sent_at END,error=?,coverage=?,audible=?
                 WHERE event_id=? AND recipient=?
                 """, (status,status,time.time()+retry_in,status,time.time(),error,
-                      json.dumps(coverage) if coverage is not None else None,event_id,recipient))
+                      json.dumps(coverage) if coverage is not None else None,audible,event_id,recipient))
             self.db.commit()
 
     def cleanup(self,days):

@@ -119,8 +119,10 @@ class Telegram:
             data = {'chat_id': target['external_id'], 'caption': caption, 'disable_notification': str(silent).lower()}
             if event_id:
                 links = [self.dashboard_link('Replay on home Wi-Fi', 'event='+event_id)]
-                if event and event.get('activity_group'):
-                    links.append(self.dashboard_link('Activity group', 'group='+event['activity_group']))
+                if event:
+                    group = event.get('episode_id') or event.get('activity_group')
+                    if group:
+                        links.append(self.dashboard_link('Related recordings', 'group='+group))
                 rows = [links]
                 if target['role'] == 'admin':
                     rows.append([button('Useful alert', 'review:useful:'+event_id),

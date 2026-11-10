@@ -2,11 +2,20 @@
 
 Open **Activity → Activity groups** to see related person and vehicle events.
 Each entry shows its camera, time and reason and links to that view's replay.
-Telegram sends one alert per group to each account. A repeat is skipped only
-after Telegram accepted another event from that group for the same account.
+Telegram sends an immediate alert per episode to each account. A later
+event can add one audible alert if the first was silent and its camera rules
+request sound. A repeat is skipped only after Telegram accepted an equivalent
+alert for that account.
 Every camera event keeps its own recording. The first alert can be sent as soon
 as detection is confirmed. Pushover and custom webhooks still deliver camera
 events individually.
+
+An episode can contain distinct person and vehicle tracks. People observed
+close together at the same time, or a person and recent vehicle motion in
+the same part of a view, can share an episode. The normal object association
+extends it to other cameras. Different vehicle groups and ambiguous episode
+matches stay separate. New episode links are bounded by a ten-minute horizon.
+Telegram links to the combined recordings.
 
 Watchyard considers up to 480 recent person and vehicle events from the past
 seven days. It forms groups in confirmation order and uses the observed start

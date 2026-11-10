@@ -332,10 +332,15 @@ def create_app(service=None, run_service=True):
         rows = service.store.correlation_events()
         if group and re.fullmatch(r'[0-9a-f]{32}', group):
             items = preview(rows, limit=None, include_single=True)
-            selected = [item for item in items if item['id'] == group]
-            others = [item for item in items if item['id'] != group and len(item['events']) > 1]
+            selected = service.store.episode_previews(group) or [item for item in items if item['id'] == group]
+            included = {event['id'] for item in selected for event in item['events']}
+            others = [item for item in items if item['id'] != group and len(item['events']) > 1
+                      and not any(event['id'] in included for event in item['events'])]
             return (selected + others)[:12]
-        return preview(rows)
+        episodes = service.store.episode_previews()
+        covered = {event['id'] for episode in episodes for event in episode['events']}
+        groups = [group for group in preview(rows) if not any(event['id'] in covered for event in group['events'])]
+        return (episodes + groups)[:12]
 
     @app.get('/api/events')
     def events(request: Request):

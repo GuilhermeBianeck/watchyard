@@ -23,7 +23,7 @@
       const missing = requested && !groups.some(group => group.id === requested);
       const markup = groups.length ? groups.map(group => {
         const cameras = new Set(group.events.map(event => event.camera_name)).size;
-        const label = group.label === 'person' ? 'Person activity' : 'Vehicle activity';
+        const label = ({person: 'Person activity', car: 'Vehicle activity', mixed: 'People and vehicle'})[group.label];
         const views = group.events.map(event => {
           const date = new Date(event.created * 1000).toLocaleString([], {
             month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit',
