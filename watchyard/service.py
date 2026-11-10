@@ -129,6 +129,12 @@ class Service:
         tracker = self.trackers[camera_config['id']]
         observed = time.monotonic()
         events = tracker.update(detections,observed,camera_config['zone'],config['confirmation_frames'],window=window)
+        for track in tracker.tracks.values():
+            if track.label == 'person' and track.first == observed:
+                try:
+                    track.initial_colors = body_colors(frame, track.box)
+                except cv2.error:
+                    continue
         observed_tracks = [track for track in tracker.tracks.values() if track.event_id and track.last == observed]
         colors = {}
         for track in observed_tracks:
@@ -147,12 +153,14 @@ class Service:
             [track.event_id for track in observed_tracks], captured,
             footprints={track.event_id: footprint(track.box) for track in observed_tracks if track.label == 'person'},
             colors=colors, moving={track.event_id for track in observed_tracks if track.moved_at == observed},
+            headings={track.event_id: json.dumps(track.heading) for track in observed_tracks if track.heading},
         )
         for event in events:
             track = tracker.tracks[event['track_id']]
             first_seen = captured - (observed - track.first)
             track.event_id = self.record(camera_config,frame,event,config,first_seen=first_seen,last_seen=captured,
-                                         entry_box=track.first_box)
+                                         entry_box=track.first_box,
+                                         initial_colors=track.initial_colors if observed - track.first >= .9 else None)
             track.sampled_at = observed
         self.incidents.observe(camera_config, tracker.tracks, config, observed, captured)
 
@@ -180,7 +188,7 @@ class Service:
             not camera.analysis_error and now - camera.detected_at < 45 for camera in online
         )
 
-    def record(self, camera, frame, event, config, *, first_seen=None, last_seen=None, entry_box=None):
+    def record(self, camera, frame, event, config, *, first_seen=None, last_seen=None, entry_box=None, initial_colors=None):
         image = frame.copy()
         draw_detection(image,event)
         name = uuid.uuid4().hex+'.jpg'
@@ -202,7 +210,8 @@ class Service:
         event_id = self.store.add(camera,event['label'],event['confidence'],name,status,reason,mode,
                                   first_seen=first_seen,last_seen=last_seen,
                                   correlation_hint=activity_hint,
-                                  last_motion=last_seen if event['label'] == 'car' else None)
+                                  last_motion=last_seen if event['label'] == 'car' else None,
+                                  recent_colors=json.dumps(initial_colors) if initial_colors else None)
         if event['label'] == 'car':
             self.plates.submit(camera, event_id)
         log.info('Confirmed %s on camera %s (%s)',event['label'],camera['id'],status)

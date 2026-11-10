@@ -11,6 +11,9 @@ from .rules import iou
 DOORWAY_GAP = 120
 MAX_GROUP_AGE = 300
 MAX_PERSON_GROUP_AGE = 600
+MAX_CONTINUOUS_AGE = 1800
+MAX_PERSON_BLIND_GAP = 60
+CROSS_VIEW_HANDOFF = 45
 CLOSE_TRANSITION = 12
 LABELS = {'person', 'car'}
 
@@ -64,6 +67,15 @@ def _appearance(a, b):
     first, second = _colors(a), _colors(b)
     return max((sum(min(x, y) for x, y in zip(a_sample, b_sample))
                 for a_sample in first for b_sample in second), default=0)
+
+
+def _consistent_appearance(a, b):
+    first, second = _colors(a), _colors(b)
+    if len(first) < 2 or len(second) < 2 or any(sum(sample[:12]) < .35 for sample in first + second):
+        return False
+    scores = [[sum(min(x, y) for x, y in zip(left, right)) for right in second] for left in first]
+    # Each sample must agree with a sample from the other track.
+    return min(min(map(max, scores)), min(map(max, zip(*scores)))) >= .82
 
 
 def _color_conflict(a, b, similarity):
@@ -127,9 +139,14 @@ def _link(a, b):
     return a['label'], a['camera'], b['camera']
 
 
+def last_point(event):
+    if event.get('last_x') is not None and event.get('last_y') is not None:
+        return event['last_x'], event['last_y']
+    return None
+
+
 def _area_distance(a, b):
-    last = (a['last_x'], a['last_y']) if a.get('last_x') is not None and a.get('last_y') is not None else None
-    ends = (a['hint'].get('point'), last)
+    ends = (a['hint'].get('point'), last_point(a))
     starts = (b['hint'].get('point'), b['hint'].get('entry'))
     return min((math.dist(end, start) for end in ends if end for start in starts if start), default=None)
 
@@ -173,14 +190,14 @@ def _same_camera(a, b, similarity, plate, disagree):
     if disagree and not nearby_return:
         return None
     if distance is None:
-        return (1, 'Timing only on the same camera') if gap <= DOORWAY_GAP else None
+        return (1, 'Timing only on the same camera') if gap <= MAX_PERSON_BLIND_GAP else None
     if gap <= 20 and distance <= .38 and similarity >= .55:
         return 3, 'Similar appearance after a short tracking gap'
     if gap <= 35 and distance <= .38 and similarity >= .65:
         return 3, 'Similar appearance after a short tracking gap'
-    if gap <= 180 and ((distance <= .18 and similarity >= .74) or (distance <= .08 and similarity >= .62)):
+    if gap <= MAX_PERSON_BLIND_GAP and ((distance <= .18 and similarity >= .74) or (distance <= .08 and similarity >= .62)):
         return 3, 'Similar appearance on return to the same area'
-    if gap <= DOORWAY_GAP and distance <= .23:
+    if gap <= MAX_PERSON_BLIND_GAP and distance <= .23:
         return 2, 'Repeated activity in the same area'
     return None
 
@@ -210,6 +227,8 @@ def _matches(a, b, patterns, *, returning=False):
         return None
     if a['start'] > b['start']:
         a, b = b, a
+    if a['label'] == 'person' and b['start'] - a['last'] > MAX_PERSON_BLIND_GAP:
+        return None
     plate = _plate(a, b)
     if plate < 0:
         return None
@@ -262,11 +281,54 @@ def _learn(patterns, previous, event):
         observations.append((event['start'], delta, previous['hint'].get('point'), event['hint'].get('point')))
 
 
+def _learn_handoff(routes, a, b, group_id):
+    if a['label'] != 'person' or b['label'] != 'person' or a['camera'] == b['camera']:
+        return
+    gap = b['start'] - a['last']
+    exit_point, entry_point = last_point(a), b['hint'].get('entry')
+    if not (0 <= gap <= CROSS_VIEW_HANDOFF and exit_point and entry_point and _consistent_appearance(a, b)):
+        return
+    # Keep separate examples in time as well as in the episode history.
+    examples = routes[_link(a, b)]
+    if group_id in examples or (examples and b['created'] - next(reversed(examples.values()))[0] < 180):
+        return
+    examples[group_id] = (b['created'], exit_point, entry_point, gap)
+
+
+def _continuation(a, b, routes):
+    if a['label'] == 'car':
+        motion = a.get('last_motion')
+        if _plate(a, b) == 1 and motion is not None and 0 <= b['start'] - motion <= 30:
+            return 4, 'Matching plate with continuing movement'
+        return None
+    gap = b['start'] - a['last']
+    exit_point, entry_point = last_point(a), b['hint'].get('entry')
+    if not (0 <= gap <= CROSS_VIEW_HANDOFF and exit_point and entry_point and _consistent_appearance(a, b)):
+        return None
+    if a['camera'] == b['camera']:
+        incoming = json.loads(a.get('exit_vector') or 'null')
+        after = b['hint'].get('point')
+        if gap > 6 or math.dist(exit_point, entry_point) > .06 or not incoming or not after:
+            return None
+        outgoing = [end - start for start, end in zip(entry_point, after)]
+        incoming_length, outgoing_length = math.hypot(*incoming), math.hypot(*outgoing)
+        if (incoming_length >= .015 and outgoing_length >= .025
+                and sum(x*y for x, y in zip(incoming, outgoing)) >= .6 * incoming_length * outgoing_length):
+            return 3, 'Continuous direction and appearance in the same view'
+    elif sum(
+        math.dist(exit_point, start) <= .12 and math.dist(entry_point, end) <= .12 and abs(gap - travel) <= 8
+        for _, start, end, travel in routes.get(_link(a, b), {}).values()
+    ) >= 3:
+        return 3, 'Corroborated exit-to-entry route across cameras'
+    return None
+
+
 def preview(rows, *, limit=12, include_single=False):
     # Reproduce delivery order even when a later-confirmed track started first.
     events = sorted((_prepare(row) for row in rows if row['label'] in LABELS
                      and row.get('feedback') != 'false_alarm'), key=lambda e: (e['created'], e['id']))
     patterns = defaultdict(list)
+    routes = defaultdict(dict)
     groups = []
     group_keys = {}
     for event in events:
@@ -279,13 +341,16 @@ def preview(rows, *, limit=12, include_single=False):
                 group_keys[assigned] = group
             for previous, _ in reversed(group):
                 _learn(patterns, previous, event)
+                if event['created'] - group[0][0]['created'] <= MAX_PERSON_GROUP_AGE:
+                    _learn_handoff(routes, previous, event, assigned)
             group.append((event, event.get('activity_reason') or ''))
             continue
         candidates = []
+        extended = []
         limit_age = MAX_PERSON_GROUP_AGE if event['label'] == 'person' else MAX_GROUP_AGE
         for group in reversed(groups):
             age = event['created'] - group[0][0]['created']
-            if age > limit_age:
+            if age > MAX_CONTINUOUS_AGE:
                 break
             if group[0][0]['label'] != event['label']:
                 continue
@@ -296,13 +361,19 @@ def preview(rows, *, limit=12, include_single=False):
                    and not _track_fragment(*sorted((previous, event), key=lambda e: e['start']))
                    for previous, _ in group):
                 continue
-            returning = event['label'] == 'car' and any(previous['camera'] == event['camera'] for previous, _ in group)
-            matches = [(match, previous) for previous, _ in group
-                       if (match := _matches(previous, event, patterns, returning=returning))
-                       and (age <= MAX_GROUP_AGE or match[0] >= 3)]
-            if matches:
-                match, previous = max(matches, key=lambda pair: (pair[0][0], _appearance(pair[1], event), pair[1]['start']))
-                candidates.append((match, previous, group))
+            if age <= limit_age:
+                returning = event['label'] == 'car' and any(previous['camera'] == event['camera'] for previous, _ in group)
+                matches = [(match, previous) for previous, _ in group
+                           if (match := _matches(previous, event, patterns, returning=returning))
+                           and (age <= MAX_GROUP_AGE or match[0] >= 3)]
+                if matches:
+                    match, previous = max(matches, key=lambda pair: (pair[0][0], _appearance(pair[1], event), pair[1]['start']))
+                    candidates.append((match, previous, group))
+                    continue
+            match = next((match for previous, _ in reversed(group)
+                          if (match := _continuation(previous, event, routes))), None)
+            if match:
+                extended.append((match, group))
         candidates.sort(key=lambda item: (item[0][0], _appearance(item[1], event)), reverse=True)
         ambiguous = False
         if len(candidates) > 1 and candidates[0][0][0] == candidates[1][0][0]:
@@ -310,13 +381,18 @@ def preview(rows, *, limit=12, include_single=False):
             first, second = (_appearance(candidate[1], event) for candidate in candidates[:2])
             # Resolve a tie only with a clear appearance margin.
             ambiguous = rank < 2 or rank == 4 or first < .72 or first - second < .17
-        if not candidates or ambiguous:
+        if len(extended) == 1 and not candidates:
+            (_, reason), group = extended[0]
+            group.append((event, reason))
+            continue
+        if not candidates or ambiguous or extended:
             group = [(event, '')]
             groups.append(group)
             group_keys[event['id']] = group
             continue
         (_, reason), previous, group = candidates[0]
         _learn(patterns, previous, event)
+        _learn_handoff(routes, previous, event, group[0][0].get('activity_group') or group[0][0]['id'])
         group.append((event, reason))
     return [
         {'id': key, 'label': group[0][0]['label'],

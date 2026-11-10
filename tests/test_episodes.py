@@ -70,3 +70,37 @@ def test_episode_allows_one_upgrade_from_silent_to_audible(tmp_path):
     add(service, now+6, 'person')
     service.notifications.deliver_once(service.store)
     assert [(call['event_id'], call['silent']) for call in calls] == [(person, True), (car, False)]
+
+
+def test_same_doorway_and_clothing_after_gap_still_sends_a_new_alert(tmp_path):
+    service, calls = setup(tmp_path)
+    now = time.time() - 110
+    first = add(service, now, 'person')
+    service.notifications.deliver_once(service.store)
+    visitor = add(service, now+85, 'person')
+    service.notifications.deliver_once(service.store)
+    assert [call['event_id'] for call in calls] == [first, visitor]
+    assert service.store.event(visitor)['episode_id'] != service.store.event(first)['episode_id']
+
+
+def test_confirmed_person_has_two_observations_available_for_immediate_delivery(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    service, calls = setup(tmp_path)
+    config = service.settings.snapshot()
+    camera = config['cameras'][0]
+    now = time.time()
+    coordinates = SimpleNamespace(cpu=lambda: np.array([30, 20, 65, 80]))
+    box = SimpleNamespace(cls=[0], conf=[.9], xyxy=[coordinates])
+    service.model = SimpleNamespace(predict=lambda *args, **kwargs: [SimpleNamespace(boxes=[box], names=['person'])])
+    for tick in range(3):
+        monkeypatch.setattr('watchyard.service.time.monotonic', lambda: tick)
+        color = (255, 0, 0) if tick == 0 else (0, 255, 0)
+        frame = np.full((100, 100, 3), color, dtype=np.uint8)
+        service.analyse_frame(service.cameras[1], camera, frame, now + tick, tick + 1, config)
+    [event] = service.store.recent()
+    assert json.loads(event['recent_colors']) != json.loads(event['correlation_hint'])['colors']
+    service.notifications.deliver_once(service.store)
+    assert [call['event_id'] for call in calls] == [event['id']]

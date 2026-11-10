@@ -162,15 +162,61 @@ def test_multiple_equally_plausible_matches_stay_separate():
     assert not preview(rows)
 
 
-def test_only_corroborated_person_groups_continue_after_five_minutes():
-    point = [.4, .6]
+def test_reappearance_after_a_blind_gap_stays_separate_even_with_the_same_clothing():
     color = [1.0] + [0.0]*15
-    rows = [event(str(i), 2, i, colors=color, point=point) for i in (100, 245, 390, 535, 680, 825)]
-    groups = preview(rows, include_single=True)
-    assert [e['id'] for e in groups[-1]['events']] == ['100', '245', '390', '535', '680']
-    assert groups[0]['id'] == '825'
-    no_color = [event(str(i), 2, i, point=point) for i in (100, 190, 280, 370, 460)]
-    assert [e['id'] for e in preview(no_color, include_single=True)[-1]['events']] == ['100', '190', '280', '370']
+    first = event('first', 2, 100, end=110, point=[.4, .6], colors=color, recent_colors=json.dumps(color))
+    visitor = event('visitor', 2, 185, point=[.4, .6], colors=color, recent_colors=json.dumps(color))
+    assert not preview([first, visitor])
+
+
+def _trajectory(key, camera, start, end, *, entry, point, exit_point):
+    color = [.9, .1] + [0.0]*14
+    row = event(key, camera, start, end=end, point=point, colors=color, recent_colors=json.dumps(color),
+                last_x=exit_point[0], last_y=exit_point[1])
+    row['correlation_hint'] = json.dumps({'point': point, 'entry': entry, 'colors': color})
+    return row
+
+
+def test_long_group_follows_observed_direction_and_rejects_opposite_traffic():
+    first = _trajectory('continuous', 2, 100, 750, entry=[.2,.6], point=[.3,.6], exit_point=[.46,.6])
+    first['exit_vector'] = json.dumps([.03, 0])
+    handoff = _trajectory('continues', 2, 754, 760, entry=[.47,.6], point=[.54,.6], exit_point=[.61,.6])
+    assert [row['id'] for row in preview([first, handoff])[0]['events']] == ['continuous', 'continues']
+    opposite = _trajectory('incoming', 2, 754, 760, entry=[.47,.6], point=[.39,.6], exit_point=[.35,.6])
+    assert not preview([first, opposite])
+    missing_direction = {**first, 'exit_vector': None}
+    assert not preview([missing_direction, handoff])
+    competitor = {**_trajectory('other', 9, 745, 751, entry=[.2,.6], point=[.3,.6], exit_point=[.4,.6]),
+                  'activity_group': 'other'}
+    assert not preview([first, competitor, handoff])
+    handoff.pop('recent_colors')
+    assert not preview([first, handoff])
+
+
+def test_long_cross_camera_group_requires_repeated_directional_routes_and_matching_samples():
+    training = []
+    for stamp in (100, 2600, 5100):
+        training.extend([
+            _trajectory(f'leave-{stamp}', 4, stamp, stamp+20, entry=[.2,.5], point=[.25,.5], exit_point=[.3,.5]),
+            _trajectory(f'enter-{stamp}', 9, stamp+29, stamp+39, entry=[.55,.65], point=[.6,.65], exit_point=[.65,.65]),
+        ])
+    first = _trajectory('long visit', 4, 8000, 8680, entry=[.2,.5], point=[.25,.5], exit_point=[.3,.5])
+    continuation = _trajectory('next view', 9, 8689, 8700, entry=[.55,.65], point=[.6,.65], exit_point=[.65,.65])
+    assert preview(training+[first, continuation])[0]['id'] == 'long visit'
+    assert all(group['id'] != 'long visit' for group in preview(training[:4]+[first, continuation]))
+    other_entry = _trajectory('different entrance', 9, 8689, 8700, entry=[.85,.95], point=[.6,.65], exit_point=[.65,.65])
+    assert all(group['id'] != 'long visit' for group in preview(training+[first, other_entry]))
+
+
+def test_long_vehicle_group_requires_recent_movement_and_the_same_plate():
+    first = event('vehicle', 1, 100, end=550, label='car', plate='AB-12-CD', last_motion=545)
+    target = event('other view', 2, 557, label='car', plate='AB-12-CD')
+    assert preview([first, target])[0]['id'] == 'vehicle'
+    first['last_motion'] = 103
+    assert not preview([first, target])
+    first['last_motion'] = 545
+    target['plate'] = 'XY-34-ZZ'
+    assert not preview([first, target])
 
 
 def test_shadow_handoff_uses_a_colour_signal_and_a_short_ordered_gap():

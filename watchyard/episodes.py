@@ -1,7 +1,7 @@
 """Connect nearby activity groups without treating their tracks as one object."""
 import math
 
-from .correlation import _prepare
+from .correlation import _prepare, last_point
 
 MAX_EPISODE_SECONDS = 600
 PERSON_WINDOW = 45
@@ -13,15 +13,9 @@ def _nearby(a, b):
     # Footprints from different views are in different coordinate systems.
     if a['camera'] != b['camera']:
         return False
-    points_a = (a['hint'].get('point'), a['hint'].get('entry'), _last_point(a))
-    points_b = (b['hint'].get('point'), b['hint'].get('entry'), _last_point(b))
+    points_a = (a['hint'].get('point'), a['hint'].get('entry'), last_point(a))
+    points_b = (b['hint'].get('point'), b['hint'].get('entry'), last_point(b))
     return any(math.dist(x, y) <= NEARBY for x in points_a if x for y in points_b if y)
-
-
-def _last_point(event):
-    if event.get('last_x') is not None and event.get('last_y') is not None:
-        return event['last_x'], event['last_y']
-    return None
 
 
 def related_episode(event, history):

@@ -317,6 +317,7 @@ def create_app(service=None, run_service=True):
         event.pop('last_y', None)
         event.pop('recent_colors', None)
         event.pop('last_motion', None)
+        event.pop('exit_vector', None)
         if not owner:
             event.pop('plate', None)
         elif event.get('plate'):

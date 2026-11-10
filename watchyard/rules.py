@@ -54,6 +54,8 @@ class Track:
     first_box: list = field(default_factory=list)
     moved_at: float | None = None
     sampled_at: float | None = None
+    initial_colors: list | None = None
+    heading: tuple | None = None
 
 
 class Tracker:
@@ -83,16 +85,18 @@ class Tracker:
         confirmed_tracks = []
         for i, d in enumerate(detections):
             box = d['box']
+            foot = ((box[0]+box[2])/2, box[3])
             if i in assignments:
                 t = self.tracks[assignments[i]]
                 if t.label == 'car' and math.dist(center(t.box), center(box)) >= .02:
                     t.moved_at = now
+                if t.label == 'person':
+                    t.heading = (foot[0] - (t.box[0]+t.box[2])/2, foot[1] - t.box[3]) if now-t.last <= 2.5 else None
             else:
                 self.counter += 1
                 t = Track(self.counter, d['label'], box, center(box), now, now, first_box=box)
                 self.tracks[t.id] = t
             t.last, t.box, t.label = now, box, d['label']
-            foot = ((box[0]+box[2])/2, box[3])
             in_zone = inside(foot, zone)
             # Require repeated observations INSIDE the alert zone.
             t.observations = [v for v in t.observations if now-v[0] < window]

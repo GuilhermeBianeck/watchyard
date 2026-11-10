@@ -25,6 +25,8 @@ already delivered group even if it started tracking that person earlier.
 - **Same camera.** Compare the last observed position with where the next
   track began, along with its position and coarse colour at confirmation.
   Look for returns to the same area or a short tracking gap along the path.
+  A person who reappears after more than 60 seconds without an observation
+  that links the two tracks can start a fresh episode, even in similar clothes.
   Overlapping people stay separate except for very brief overlaps with
   near-identical detections, which can be treated as track fragments.
 - **Across cameras.** Similar appearance supports longer transitions.
@@ -37,15 +39,20 @@ already delivered group even if it started tracking that person earlier.
   separately from visibility. Strongly similar vehicles can be linked
   when a maneuver continues in another view. Older recordings can extend
   a short return to a view already in the group if the appearances agree.
-- **Limits.** Ordinary groups are capped at five minutes. Repeated strong
-  matches can continue a person group for up to ten minutes. Vehicles are
-  anchored to confirmed movement so a parked car cannot extend the window.
-  Conflicting plates and equally plausible competing groups keep events separate.
-  A clear appearance margin can resolve a tie between otherwise viable groups.
+- **Long activities.** Ordinary groups span up to five minutes, or ten
+  minutes for people with strong matches. With corroborated continuity a
+  group can span up to 30 minutes. On the same camera, a person needs a
+  short handoff with consistent recent direction, exit and entry positions,
+  and similar appearance in two observations per track. Across cameras, the
+  exit, entry and travel time must agree with at least three separate prior
+  handoffs in that direction, as well as the appearance of the current tracks.
+  A vehicle needs the same plate and recent movement to use the extended
+  window. Competing matches keep these continuations separate so they
+  can still produce an alert.
 
 New events retain normalized positions, a box and coarse colour histograms
-for correlation. A later body-colour sample can recover a useful cue when
-the first frame was in shadow or the viewing angle changes. Correlation uses existing detection frames and requires
+for correlation. Two body-colour samples can be available by confirmation. Later samples
+can recover a useful cue when the viewing angle changes. Correlation uses existing detection frames and requires
 neither a separate image crop on disk nor a separate model. Similar clothing
 or vehicles can still produce mistaken matches. Existing group IDs and replay
 links are retained. New assignments are saved when Telegram delivery is first
