@@ -37,6 +37,7 @@ class Store:
             observations INTEGER NOT NULL, dwell_seconds REAL NOT NULL)""")
         self.db.execute('CREATE INDEX IF NOT EXISTS incident_assessed_at ON incident_assessments(assessed_at DESC)')
         for table, additions in {
+            'events': [('recent_colors', 'TEXT'), ('last_motion', 'REAL')],
             'health_state': [('outage_id', 'TEXT'), ('outage_since', 'REAL')],
             'health_outbox': [('camera_changes', 'TEXT')],
             'recipient_deliveries': [('coverage', 'TEXT')],
@@ -52,22 +53,29 @@ class Store:
                             """)
         self.db.commit()
 
-    def add(self,camera,label,confidence,snapshot,status='pending',detail='',notify_mode='',*,first_seen=None,last_seen=None,correlation_hint=None):
+    def add(self,camera,label,confidence,snapshot,status='pending',detail='',notify_mode='',*,first_seen=None,last_seen=None,correlation_hint=None,last_motion=None):
         key=uuid.uuid4().hex
         with self.lock:
-            self.db.execute('INSERT INTO events (id,created,camera,camera_name,label,confidence,snapshot,status,detail,notify_mode,first_seen,last_seen,correlation_hint) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',(key,time.time(),camera['id'],camera['name'],label,confidence,snapshot,status,detail,notify_mode,first_seen,last_seen,correlation_hint))
+            self.db.execute("""
+                INSERT INTO events (id,created,camera,camera_name,label,confidence,snapshot,status,detail,notify_mode,
+                first_seen,last_seen,correlation_hint,last_motion) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """, (key,time.time(),camera['id'],camera['name'],label,confidence,snapshot,status,detail,notify_mode,
+                      first_seen,last_seen,correlation_hint,last_motion))
             self.db.commit()
         return key
 
-    def extend_observations(self, event_ids, seen, *, footprints=None):
+    def extend_observations(self, event_ids, seen, *, footprints=None, colors=None, moving=()):
         if not event_ids:
             return
         footprints = footprints or {}
+        colors = colors or {}
         with self.lock:
             self.db.executemany(
-                'UPDATE events SET last_seen=?, last_x=COALESCE(?,last_x), last_y=COALESCE(?,last_y) '
+                'UPDATE events SET last_seen=?, last_x=COALESCE(?,last_x), last_y=COALESCE(?,last_y), '
+                'recent_colors=COALESCE(?,recent_colors), last_motion=COALESCE(?,last_motion) '
                 'WHERE id=? AND last_seen<?',
-                [(seen, *footprints.get(key, (None, None)), key, seen) for key in event_ids],
+                [(seen, *footprints.get(key, (None, None)), colors.get(key), seen if key in moving else None, key, seen)
+                 for key in event_ids],
             )
             self.db.commit()
 
@@ -103,7 +111,7 @@ class Store:
         with self.lock:
             return [dict(row) for row in self.db.execute(
                 "SELECT id,created,camera,camera_name,label,first_seen,last_seen,feedback,plate,correlation_hint,"
-                "activity_group,activity_reason,last_x,last_y FROM events WHERE created>=? AND created<=? "
+                "activity_group,activity_reason,last_x,last_y,recent_colors,last_motion FROM events WHERE created>=? AND created<=? "
                 "AND label IN ('person','car') ORDER BY created DESC,id DESC LIMIT 480",
                 (now-7*86400, now if before is None else before))]
 

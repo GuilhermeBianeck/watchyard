@@ -20,8 +20,8 @@ def footprint(box):
     return ((left + right) / 2, bottom)
 
 
-def hint(frame, box, entry_box=None):
-    """Keep coarse colour and position, without storing another crop or face data."""
+def body_colors(frame, box):
+    """Compute a coarse body histogram below the head."""
     height, width = frame.shape[:2]
     left, top, right, bottom = box
     # Torso or body area. Remove the top portion, which can contain a face.
@@ -35,8 +35,12 @@ def hint(frame, box, entry_box=None):
         chromatic = (hsv[:, 1] >= 48) & (hsv[:, 2] >= 48)
         bins = np.where(chromatic, hsv[:, 0] // 15, 12 + hsv[:, 2] // 64)
         colors = (np.bincount(bins, minlength=16) / len(hsv)).round(4).tolist()
+    return colors
+
+
+def hint(frame, box, entry_box=None):
     return json.dumps({'point': footprint(box), 'entry': footprint(entry_box or box),
-                       'box': box, 'colors': colors})
+                       'box': box, 'colors': body_colors(frame, box)})
 
 
 def _prepare(row):
@@ -45,18 +49,21 @@ def _prepare(row):
     result['start'] = row['created'] if row['label'] == 'car' else (row.get('first_seen') or row['created'])
     result['last'] = row.get('last_seen') or row['created']
     result['hint'] = json.loads(row.get('correlation_hint') or '{}')
+    result['samples'] = tuple(sample for sample in (
+        result['hint'].get('colors'), json.loads(row.get('recent_colors') or 'null'),
+    ) if sample)
     return result
 
 
 def _colors(event):
     # Grey or nearly black crops are common and weak evidence between views.
-    colors = event['hint'].get('colors')
-    return colors if colors and sum(colors[:12]) >= .2 else None
+    return [sample for sample in event['samples'] if sum(sample[:12]) >= .2]
 
 
 def _appearance(a, b):
     first, second = _colors(a), _colors(b)
-    return sum(min(x, y) for x, y in zip(first, second)) if first and second else 0
+    return max((sum(min(x, y) for x, y in zip(a_sample, b_sample))
+                for a_sample in first for b_sample in second), default=0)
 
 
 def _color_conflict(a, b, similarity):
@@ -65,10 +72,49 @@ def _color_conflict(a, b, similarity):
         return False
     if similarity < .35:
         return True
-    first_total, second_total = sum(first[:12]), sum(second[:12])
-    return min(first_total, second_total) >= .30 and sum(
-        min(x / first_total, y / second_total) for x, y in zip(first[:12], second[:12])
-    ) < .32
+    if any(sum(sample[:12]) < .30 for sample in first + second):
+        return False
+    return all(_hue_agreement(x, y, smooth=False) < .32 for x in first for y in second)
+
+
+def _hue_agreement(first, second, *, smooth):
+    def distribution(sample):
+        total = sum(sample[:12])
+        hue = [value / total for value in sample[:12]]
+        if smooth:
+            return [(.5 * hue[i] + .25 * (hue[i-1] + hue[(i+1) % 12])) for i in range(12)]
+        return hue
+
+    return sum(min(x, y) for x, y in zip(distribution(first), distribution(second)))
+
+
+def _shadow_handoff(a, b):
+    # Hue is usable even when the first view is mostly in shadow, if it still
+    # contains a measurable colour signal and the handoff is close and ordered.
+    delta = b['start'] - a['start']
+    tail = b['start'] - a['last']
+    if not (CLOSE_TRANSITION < delta <= 30 and 0 <= tail <= 15 and a['last'] - a['start'] >= 4):
+        return False
+    if not a['hint'].get('point') or not b['hint'].get('point'):
+        return False
+    return any(
+        min(sum(x[:12]), sum(y[:12])) >= .10
+        and max(x[12], y[12]) >= .65
+        and _hue_agreement(x, y, smooth=True) >= .68
+        for x in a['samples'] for y in b['samples']
+    )
+
+
+def _vehicle_handoff(a, b, similarity, returning):
+    if not a['hint'].get('point') or not b['hint'].get('point'):
+        return False
+    motion = a.get('last_motion')
+    if motion is not None:
+        return similarity >= .78 and b['start'] - a['start'] <= 120 and 0 <= b['start'] - motion <= 45
+    # Old rows recorded visibility but not actual movement. Use a short
+    # observation only when the two appearances also match strongly.
+    return (returning and similarity >= .83 and 6 <= a['last'] - a['start'] <= 55
+            and b['start'] - a['start'] <= 100 and 0 <= b['start'] - a['last'] <= 45)
 
 
 def _plate(a, b):
@@ -159,7 +205,7 @@ def _on_learned_route(a, b, patterns):
     ) >= 2
 
 
-def _matches(a, b, patterns):
+def _matches(a, b, patterns, *, returning=False):
     if a['label'] != b['label']:
         return None
     if a['start'] > b['start']:
@@ -183,6 +229,8 @@ def _matches(a, b, patterns):
         if similarity >= .68 and (delta <= CLOSE_TRANSITION or (a['hint'].get('point') and b['hint'].get('point'))):
             return 2, 'Close timing and similar appearance across cameras'
     if a['label'] == 'car':
+        if _vehicle_handoff(a, b, similarity, returning):
+            return 3, 'Similar vehicle continuing after recent movement'
         if delta <= 65 and _on_learned_route(a, b, patterns):
             return 3, 'Repeated vehicle route across cameras'
     else:
@@ -192,6 +240,8 @@ def _matches(a, b, patterns):
         plausible_route = (tail <= 90 and similarity >= .50) or (tail <= 120 and similarity >= .82)
         if delta <= 150 and plausible_route and _on_learned_route(a, b, patterns):
             return 3, 'Repeated person route with similar appearance'
+        if _shadow_handoff(a, b):
+            return 2, 'Short handoff with matching colour in shadow'
     if delta <= CLOSE_TRANSITION:
         return 1, 'Timing only across cameras'
     return None
@@ -246,14 +296,21 @@ def preview(rows, *, limit=12, include_single=False):
                    and not _track_fragment(*sorted((previous, event), key=lambda e: e['start']))
                    for previous, _ in group):
                 continue
+            returning = event['label'] == 'car' and any(previous['camera'] == event['camera'] for previous, _ in group)
             matches = [(match, previous) for previous, _ in group
-                       if (match := _matches(previous, event, patterns))
+                       if (match := _matches(previous, event, patterns, returning=returning))
                        and (age <= MAX_GROUP_AGE or match[0] >= 3)]
             if matches:
-                match, previous = max(matches, key=lambda pair: (pair[0][0], pair[1]['start']))
+                match, previous = max(matches, key=lambda pair: (pair[0][0], _appearance(pair[1], event), pair[1]['start']))
                 candidates.append((match, previous, group))
-        candidates.sort(key=lambda item: item[0][0], reverse=True)
-        if not candidates or (len(candidates) > 1 and candidates[0][0][0] == candidates[1][0][0]):
+        candidates.sort(key=lambda item: (item[0][0], _appearance(item[1], event)), reverse=True)
+        ambiguous = False
+        if len(candidates) > 1 and candidates[0][0][0] == candidates[1][0][0]:
+            rank = candidates[0][0][0]
+            first, second = (_appearance(candidate[1], event) for candidate in candidates[:2])
+            # Resolve a tie only with a clear appearance margin.
+            ambiguous = rank < 2 or rank == 4 or first < .72 or first - second < .17
+        if not candidates or ambiguous:
             group = [(event, '')]
             groups.append(group)
             group_keys[event['id']] = group

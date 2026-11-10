@@ -315,6 +315,8 @@ def create_app(service=None, run_service=True):
         event.pop('correlation_hint', None)
         event.pop('last_x', None)
         event.pop('last_y', None)
+        event.pop('recent_colors', None)
+        event.pop('last_motion', None)
         if not owner:
             event.pop('plate', None)
         elif event.get('plate'):

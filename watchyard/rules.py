@@ -52,6 +52,8 @@ class Track:
     displacement: float = 0
     event_id: str | None = None
     first_box: list = field(default_factory=list)
+    moved_at: float | None = None
+    sampled_at: float | None = None
 
 
 class Tracker:
@@ -83,6 +85,8 @@ class Tracker:
             box = d['box']
             if i in assignments:
                 t = self.tracks[assignments[i]]
+                if t.label == 'car' and math.dist(center(t.box), center(box)) >= .02:
+                    t.moved_at = now
             else:
                 self.counter += 1
                 t = Track(self.counter, d['label'], box, center(box), now, now, first_box=box)

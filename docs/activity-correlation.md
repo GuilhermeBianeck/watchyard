@@ -22,14 +22,21 @@ already delivered group even if it started tracking that person earlier.
   Repeated, independently corroborated transitions can establish a route
   based on positions in both views, without preconfigured camera pairs.
   A learned vehicle route can bridge a visible-light view and an infrared
+  view. A short, ordered handoff can use a small colour signal in a shadowed
   view. Timing alone supports only close transitions and cannot train a route.
+- **Continuing vehicle movement.** The last observed movement is tracked
+  separately from visibility. Strongly similar vehicles can be linked
+  when a maneuver continues in another view. Older recordings can extend
+  a short return to a view already in the group if the appearances agree.
 - **Limits.** Ordinary groups are capped at five minutes. Repeated strong
   matches can continue a person group for up to ten minutes. Vehicles are
   anchored to confirmed movement so a parked car cannot extend the window.
   Conflicting plates and equally plausible competing groups keep events separate.
+  A clear appearance margin can resolve a tie between otherwise viable groups.
 
 New events retain normalized positions, a box and coarse colour histograms
-for correlation. Correlation uses existing detection frames and requires
+for correlation. A later body-colour sample can recover a useful cue when
+the first frame was in shadow or the viewing angle changes. Correlation uses existing detection frames and requires
 neither a separate image crop on disk nor a separate model. Similar clothing
 or vehicles can still produce mistaken matches. Existing group IDs and replay
 links are retained. New assignments are saved when Telegram delivery is first
@@ -39,3 +46,9 @@ Activity shows **Added to existing alert** when a repeat is saved without
 sending another Telegram notification. For a field check, compare the first
 notification and related replays with a known walk or drive. Include two
 different people or vehicles arriving close together to measure mistaken merges.
+
+
+The design uses local track fragments plus appearance and time between views,
+following the general approach described in [Integrating Appearance and
+Spatial-Temporal Information for Multi-Camera People Tracking](https://openaccess.thecvf.com/content/CVPR2023W/AICity/html/Yang_Integrating_Appearance_and_Spatial-Temporal_Information_for_Multi-Camera_People_Tracking_CVPRW_2023_paper.html).
+Watchyard uses coarse colour summaries and motion from the existing detector.

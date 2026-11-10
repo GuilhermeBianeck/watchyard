@@ -171,3 +171,57 @@ def test_only_corroborated_person_groups_continue_after_five_minutes():
     assert groups[0]['id'] == '825'
     no_color = [event(str(i), 2, i, point=point) for i in (100, 190, 280, 370, 460)]
     assert [e['id'] for e in preview(no_color, include_single=True)[-1]['events']] == ['100', '190', '280', '370']
+
+
+def test_shadow_handoff_uses_a_colour_signal_and_a_short_ordered_gap():
+    blue_in_shadow = [0.0]*6 + [.12, 0, 0, 0, 0, .01, .87, 0, 0, 0]
+    blue_in_light = [0.0]*6 + [.33, .31, .01, 0, .01, 0, .19, .12, .03, 0]
+    start = event('doorway', 17, 100, end=110, colors=blue_in_shadow, point=[.36, .54])
+    target = event('outdoors', 24, 120, colors=blue_in_light, point=[.12, .60])
+    assert preview([start, target])[0]['events'][-1]['reason'].startswith('Short handoff')
+    late = event('late', 24, 128, colors=blue_in_light, point=[.12, .60])
+    assert not preview([start, late])
+    black = [0.0]*12 + [1, 0, 0, 0]
+    achromatic = event('no colour', 17, 100, end=110, colors=black, point=[.36, .54])
+    assert not preview([achromatic, target])
+
+
+def test_later_appearance_sample_resolves_a_contested_handoff():
+    first_blue = [1.0] + [0.0]*15
+    second_blue = [.73, .27] + [0.0]*14
+    before = [
+        event('one', 4, 100, end=115, colors=second_blue, point=[.2, .5], recent_colors=json.dumps(first_blue)),
+        event('two', 4, 102, end=114, colors=second_blue, point=[.5, .8]),
+    ]
+    target = event('other view', 12, 116, colors=first_blue, point=[.3, .6])
+    assert preview(before + [target])[0]['id'] == 'one'
+    before[0].pop('recent_colors')
+    assert not preview(before + [target])
+
+
+def test_vehicle_continuation_uses_motion_or_a_return_to_an_existing_view():
+    color = [1.0] + [0.0]*15
+    prior = event('maneuver', 8, 100, end=144, label='car', point=[.3, .9], colors=color)
+    target = event('exit', 6, 183, label='car', point=[.4, .3], colors=color)
+    # An old visibility timestamp alone cannot extend an unrelated vehicle group.
+    assert not preview([prior, target])
+    prior['last_motion'] = 144
+    assert preview([prior, target])[0]['events'][-1]['reason'].startswith('Similar vehicle continuing')
+    prior['last_motion'] = 103
+    assert not preview([prior, target])
+    prior.pop('last_motion')
+    earlier = event('entry', 6, 97, label='car', point=[.8, .9], colors=color)
+    assert [row['id'] for row in preview([earlier, prior, target])[0]['events']] == ['entry', 'maneuver', 'exit']
+    target['plate'], prior['plate'] = 'XY-11-ZZ', 'AB-11-CD'
+    assert all(row['id'] != 'exit' for row in preview([earlier, prior, target])[0]['events'])
+
+
+def test_motion_timestamp_does_not_advance_while_vehicle_is_parked():
+    from watchyard.rules import Tracker
+
+    tracker = Tracker()
+    for tick, x in enumerate((.4, .421, .45, .452, .452, .453)):
+        tracker.update([{'label': 'car', 'box': [x, .3, x + .2, .7], 'confidence': .9}], tick, [])
+    track, = tracker.tracks.values()
+    assert track.last == 5
+    assert track.moved_at == 2

@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import threading
@@ -18,7 +19,7 @@ from .runtime import Runtime
 from .replay import Clips
 from .live import Live
 from .plates import Plates
-from .correlation import footprint, hint as correlation_hint
+from .correlation import body_colors, footprint, hint as correlation_hint
 from .incidents import IncidentSimulation
 
 log = logging.getLogger('watchyard')
@@ -129,15 +130,30 @@ class Service:
         observed = time.monotonic()
         events = tracker.update(detections,observed,camera_config['zone'],config['confirmation_frames'],window=window)
         observed_tracks = [track for track in tracker.tracks.values() if track.event_id and track.last == observed]
+        colors = {}
+        for track in observed_tracks:
+            if track.label not in ('person', 'car') or (track.sampled_at is not None and observed - track.sampled_at < 4):
+                continue
+            if track.label == 'car' and track.moved_at != observed:
+                continue
+            track.sampled_at = observed
+            try:
+                sample = body_colors(frame, track.box)
+            except cv2.error:
+                continue
+            if sample and sum(sample[:12]) >= .2:
+                colors[track.event_id] = json.dumps(sample)
         self.store.extend_observations(
             [track.event_id for track in observed_tracks], captured,
             footprints={track.event_id: footprint(track.box) for track in observed_tracks if track.label == 'person'},
+            colors=colors, moving={track.event_id for track in observed_tracks if track.moved_at == observed},
         )
         for event in events:
             track = tracker.tracks[event['track_id']]
             first_seen = captured - (observed - track.first)
             track.event_id = self.record(camera_config,frame,event,config,first_seen=first_seen,last_seen=captured,
                                          entry_box=track.first_box)
+            track.sampled_at = observed
         self.incidents.observe(camera_config, tracker.tracks, config, observed, captured)
 
     def ready(self):
@@ -185,7 +201,8 @@ class Service:
                 log.debug('Activity cues unavailable for camera %s', camera['id'])
         event_id = self.store.add(camera,event['label'],event['confidence'],name,status,reason,mode,
                                   first_seen=first_seen,last_seen=last_seen,
-                                  correlation_hint=activity_hint)
+                                  correlation_hint=activity_hint,
+                                  last_motion=last_seen if event['label'] == 'car' else None)
         if event['label'] == 'car':
             self.plates.submit(camera, event_id)
         log.info('Confirmed %s on camera %s (%s)',event['label'],camera['id'],status)
