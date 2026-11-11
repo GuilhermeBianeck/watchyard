@@ -1,3 +1,5 @@
+import numpy as np
+
 from watchyard.rules import Tracker,inside
 
 
@@ -20,12 +22,57 @@ def test_confirmed_visit_alerts_once():
     assert t.update([detection(x=.25)],1.5,[])==[]
 
 
-def test_parked_car_not_realerted_by_leaf_motion():
-    t=Tracker()
-    for i in range(20):
-        assert not t.update([detection('car',x=.2+(i%2)*.002)],i/2,[])
-    assert len(t.update([detection('car',x=.25)],10,[]))==1
-    assert not t.update([detection('car',x=.26)],10.5,[])
+def vehicle_scene(seed, x, brightness=0):
+    rng = np.random.default_rng(seed)
+    frame = np.full((240, 400, 3), 35 + brightness, dtype=np.uint8)
+    patch = rng.integers(50, 170, (96, 80, 1), dtype=np.uint8) + brightness
+    frame[72:168, x:x + 80] = patch
+    return frame
+
+
+def vehicle_detection(x):
+    return {'label': 'car', 'box': [x / 400, .3, (x + 80) / 400, .7], 'confidence': .9}
+
+
+def test_box_shift_during_lighting_change_does_not_alert():
+    tracker = Tracker()
+    for tick, (box, brightness) in enumerate(((80, 0), (80, 0), (102, 70), (102, 35), (80, 0))):
+        assert not tracker.update([vehicle_detection(box)], tick, [], window=3.5,
+                                  frame=vehicle_scene(1, 80, brightness))
+    track, = tracker.tracks.values()
+    assert track.moved_at is None
+
+
+def test_motion_timestamp_does_not_advance_while_vehicle_is_parked():
+    tracker = Tracker()
+    alerts = []
+    for tick, (car, box) in enumerate(((160, 160), (168, 168), (180, 180),
+                                       (180, 188), (180, 180), (180, 180))):
+        alerts.extend(tracker.update([vehicle_detection(box)], tick, [], window=3.5,
+                                     frame=vehicle_scene(1, car)))
+    assert len(alerts) == 1
+    track, = tracker.tracks.values()
+    assert track.last == 5
+    assert track.moved_at == 2
+
+
+def test_vehicle_reconnects_after_large_jump_only_if_patches_match():
+    for seed in (1, 2):
+        tracker = Tracker()
+        for tick, x in enumerate((40, 51, 62)):
+            alerts = tracker.update([vehicle_detection(x)], tick, [], window=3.5,
+                                    frame=vehicle_scene(1, x))
+        track_id = alerts[0]['track_id']
+        tracker.update([], 3, [])
+        for tick, x in enumerate((132, 143, 154), start=4):
+            alerts = tracker.update([vehicle_detection(x)], tick, [], window=3.5,
+                                    frame=vehicle_scene(seed, x))
+        if seed == 1:
+            assert not alerts
+            assert tracker.tracks[track_id].last == 6
+        else:
+            assert len(alerts) == 1
+            assert alerts[0]['track_id'] != track_id
 
 
 def test_two_people_each_alert_independently():

@@ -2,6 +2,13 @@
 import math
 from dataclasses import dataclass, field
 
+import cv2
+from numpy import ndarray
+
+from .motion import vehicle_motion
+
+VEHICLE_GAP = 5
+
 
 def inside(point, polygon):
     if not polygon:
@@ -56,6 +63,7 @@ class Track:
     sampled_at: float | None = None
     initial_colors: list | None = None
     heading: tuple | None = None
+    vehicle_frame: ndarray | None = field(default=None, repr=False, compare=False)
 
 
 class Tracker:
@@ -63,8 +71,11 @@ class Tracker:
         self.tracks = {}
         self.counter = 0
 
-    def update(self, detections, now, zone, confirmation=3, window=3):
+    def update(self, detections, now, zone, confirmation=3, window=3, *, frame=None):
         self.tracks = {k:t for k,t in self.tracks.items() if now-t.last < 8}
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame is not None and any(
+            d['label'] == 'car' for d in detections
+        ) else None
         matched = set()
         events = []
         # Match globally by spatial proximity, rather than detection order.
@@ -82,14 +93,18 @@ class Tracker:
             if i not in assignments and key not in matched:
                 assignments[i] = key
                 matched.add(key)
+        continued = self.vehicle_continuations(detections, now, gray, assignments, matched)
+        assignments.update(continued)
         confirmed_tracks = []
         for i, d in enumerate(detections):
             box = d['box']
             foot = ((box[0]+box[2])/2, box[3])
             if i in assignments:
                 t = self.tracks[assignments[i]]
-                if t.label == 'car' and math.dist(center(t.box), center(box)) >= .02:
-                    t.moved_at = now
+                if t.label == 'car' and gray is not None and t.vehicle_frame is not None:
+                    if i in continued or (now - t.last <= VEHICLE_GAP and
+                                          vehicle_motion(t.vehicle_frame, gray, t.box, box)):
+                        t.moved_at = now
                 if t.label == 'person':
                     t.heading = (foot[0] - (t.box[0]+t.box[2])/2, foot[1] - t.box[3]) if now-t.last <= 2.5 else None
             else:
@@ -97,6 +112,8 @@ class Tracker:
                 t = Track(self.counter, d['label'], box, center(box), now, now, first_box=box)
                 self.tracks[t.id] = t
             t.last, t.box, t.label = now, box, d['label']
+            if t.label == 'car':
+                t.vehicle_frame = gray
             in_zone = inside(foot, zone)
             # Require repeated observations INSIDE the alert zone.
             t.observations = [v for v in t.observations if now-v[0] < window]
@@ -106,12 +123,14 @@ class Tracker:
                 t.observations.clear()
             t.displacement = max(t.displacement, math.dist(t.origin, center(box)))
             confirmed = len(t.observations) >= confirmation
-            moving = t.label != 'car' or t.displacement >= 0.035
+            moving = t.label != 'car' or (
+                t.displacement >= .035 and t.moved_at is not None and now - t.moved_at <= window
+            )
             if confirmed and moving and not t.alerted:
                 confirmed_tracks.append((t, d))
 
         for track, detection in confirmed_tracks:
-            previous = self.recent_predecessor(track)
+            previous = self.recent_predecessor(track) if track.label != 'car' else None
             track.alerted = True
             if previous:
                 # Continue the existing event so its replay includes the later observations.
@@ -120,6 +139,27 @@ class Tracker:
             else:
                 events.append({**detection, 'track_id': track.id})
         return events
+
+    def vehicle_continuations(self, detections, now, gray, assignments, matched):
+        # An approaching car can jump outside the ordinary tracker radius.
+        # Reconnect only with a unique patch match to a recently moving car.
+        if gray is None:
+            return {}
+        candidates = {}
+        for key, track in self.tracks.items():
+            if key in matched or track.vehicle_frame is None or track.moved_at is None:
+                continue
+            if now - track.moved_at > VEHICLE_GAP:
+                continue
+            for i, detection in enumerate(detections):
+                if i not in assignments and detection['label'] == 'car' and vehicle_motion(
+                    track.vehicle_frame, gray, track.box, detection['box']
+                ):
+                    candidates.setdefault(i, []).append(key)
+        return {
+            i: keys[0] for i, keys in candidates.items()
+            if len(keys) == 1 and sum(keys[0] in others for others in candidates.values()) == 1
+        }
 
     def recent_predecessor(self, track):
         # Only stitch sequential tracks. Two people visible at once remain distinct.

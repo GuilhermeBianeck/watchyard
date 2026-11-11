@@ -260,14 +260,3 @@ def test_vehicle_continuation_uses_motion_or_a_return_to_an_existing_view():
     assert [row['id'] for row in preview([earlier, prior, target])[0]['events']] == ['entry', 'maneuver', 'exit']
     target['plate'], prior['plate'] = 'XY-11-ZZ', 'AB-11-CD'
     assert all(row['id'] != 'exit' for row in preview([earlier, prior, target])[0]['events'])
-
-
-def test_motion_timestamp_does_not_advance_while_vehicle_is_parked():
-    from watchyard.rules import Tracker
-
-    tracker = Tracker()
-    for tick, x in enumerate((.4, .421, .45, .452, .452, .453)):
-        tracker.update([{'label': 'car', 'box': [x, .3, x + .2, .7], 'confidence': .9}], tick, [])
-    track, = tracker.tracks.values()
-    assert track.last == 5
-    assert track.moved_at == 2

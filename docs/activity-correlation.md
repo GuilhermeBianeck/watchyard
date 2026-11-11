@@ -35,8 +35,12 @@ already delivered group even if it started tracking that person earlier.
   A learned vehicle route can bridge a visible-light view and an infrared
   view. A short, ordered handoff can use a small colour signal in a shadowed
   view. Timing alone supports only close transitions and cannot train a route.
-- **Continuing vehicle movement.** The last observed movement is tracked
-  separately from visibility. Strongly similar vehicles can be linked
+- **Continuing vehicle movement.** Vehicle alerts require movement of several
+  visible parts of the vehicle between frames. The check tolerates changes
+  in brightness, which can make a parked car's detection box jump. A short
+  interruption in a moving vehicle's track can be rejoined when the same
+  image details appear along its path and the match is unique. The last
+  verified movement is tracked separately from visibility. Strongly similar vehicles can be linked
   when a maneuver continues in another view. Older recordings can extend
   a short return to a view already in the group if the appearances agree.
 - **Long activities.** Ordinary groups span up to five minutes, or ten

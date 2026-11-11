@@ -2,7 +2,7 @@
 
 ## Current status
 
-Watchyard 0.8.14 is in a local field pilot on an Apple Silicon Mac. The four
+Watchyard 0.8.15 is in a local field pilot on an Apple Silicon Mac. The four
 installed cameras use shared ingest and a 1 fps analysis target, with live
 viewing up to 10 fps. The recorder handles continuous recording. The dashboard
 provides live views, event history, adaptive replays and saved clips. Telegram
