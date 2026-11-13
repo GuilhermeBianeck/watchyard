@@ -207,6 +207,12 @@ class Store:
             self.db.execute("UPDATE events SET status=?,detail=?,attempts=attempts+CASE WHEN ? IN ('pending','sent') THEN 1 ELSE 0 END,next_try=?,sent_at=CASE WHEN ?='sent' THEN ? ELSE sent_at END WHERE id=?",(status,detail,status,time.time()+retry_in,status,time.time(),key))
             self.db.commit()
 
+    def defer_event(self, key, until, detail):
+        # Persist the original deadline across restarts without counting a send.
+        with self.lock, self.db:
+            self.db.execute("UPDATE events SET next_try=?,detail=? WHERE id=? AND status='pending'",
+                            (until, detail, key))
+
     def feedback(self,key,value):
         with self.lock:
             result=self.db.execute('UPDATE events SET feedback=? WHERE id=?',(value,key))

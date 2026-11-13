@@ -16,6 +16,7 @@ MAX_PERSON_BLIND_GAP = 60
 CROSS_VIEW_HANDOFF = 45
 CLOSE_TRANSITION = 12
 LABELS = {'person', 'car'}
+PERSON_SETTLE_SECONDS = 4
 
 
 def footprint(box):
@@ -400,3 +401,71 @@ def preview(rows, *, limit=12, include_single=False):
                      'created': event['created'], 'reason': reason} for event, reason in group]}
         for key, group in reversed(group_keys.items()) if include_single or len(group) > 1
     ][:limit]
+
+
+def corroborated_person_group(row, rows):
+    """Return an independently corroborated group and whether a short wait helps.
+
+    A similar person returning to a spot is only a reason to collect evidence.
+    Joining requires a simultaneous second view that independently continues
+    the old group along an established route. Never rewrite assigned groups.
+    """
+    if row['label'] != 'person':
+        return None, False
+    current = _prepare(row)
+    deadline = current['created'] + PERSON_SETTLE_SECONDS
+    history = [item for item in rows if item['id'] != current['id']
+               and item['created'] <= deadline and item.get('feedback') != 'false_alarm']
+    lookup = {item['id']: _prepare(item) for item in history}
+    groups = preview(history, limit=None, include_single=True)
+    owners = {member['id']: group['id'] for group in groups for member in group['events']}
+    patterns = defaultdict(list)
+    # Route examples must predate this event, not be learned from its peers.
+    for group in reversed(groups):
+        previous = []
+        for member in group['events']:
+            event = lookup[member['id']]
+            if event['created'] >= current['created']:
+                continue
+            for before in reversed(previous):
+                _learn(patterns, before, event)
+            previous.append(event)
+    anchors = set()
+    matches = set()
+    for group in groups:
+        members = [lookup[member['id']] for member in group['events']]
+        if (group['label'] != 'person' or group['id'] == current['id']
+                or not 0 <= current['created'] - members[0]['created'] <= MAX_PERSON_GROUP_AGE):
+            continue
+        # An already visible person in this view is a separate subject.
+        if any(event['camera'] == current['camera'] and _overlap(event, current) for event in members):
+            continue
+        prior = [event for event in members if event['created'] < current['created']]
+        if not any(0 <= current['start'] - event['last'] <= MAX_PERSON_BLIND_GAP for event in prior):
+            continue
+        if not any(event['camera'] == current['camera']
+                   and 0 < current['start'] - event['last'] <= DOORWAY_GAP
+                   and (distance := _area_distance(event, current)) is not None and distance <= .12
+                   and _appearance(event, current) >= .74
+                   and not _color_conflict(event, current, _appearance(event, current))
+                   for event in prior):
+            continue
+        anchors.add(group['id'])
+        for peer in members:
+            if (peer['camera'] == current['camera']
+                    or abs(peer['created'] - current['created']) > PERSON_SETTLE_SECONDS
+                    or not _overlap(peer, current)
+                    or _color_conflict(peer, current, _appearance(peer, current))
+                    or not _on_learned_route(peer, current, patterns)):
+                continue
+            if any(other['label'] == 'person' and owners.get(other['id']) != group['id']
+                   and ((other['camera'] == current['camera'] and _overlap(other, current))
+                        or (other['camera'] == peer['camera'] and _overlap(other, peer)))
+                   for other in lookup.values()):
+                continue
+            # A timing-only association of the peer cannot corroborate another
+            # timing-based match. Require its own independent strong link.
+            if any((match := _matches(before, peer, patterns)) and match[0] >= 2
+                   for before in prior if before['id'] != peer['id']):
+                matches.add(group['id'])
+    return (next(iter(matches)) if len(matches) == 1 else None), bool(anchors)

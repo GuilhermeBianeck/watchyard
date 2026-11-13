@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 import requests
 
 from .policy import decision
-from .correlation import LABELS, preview
+from .correlation import LABELS, PERSON_SETTLE_SECONDS, corroborated_person_group, preview
 from .health import camera_message
 from .telegram import Telegram, TelegramAPIError, keyboard
 
@@ -179,7 +179,8 @@ class Notifications:
         if failures:
             raise RuntimeError(f'Test accepted by {sent} destination(s); failed: '+', '.join(sorted(failures)))
 
-    def attempt(self, store, key, targets, notice, image=None, *, activity_group=None, episode_id=None, camera_batch=None):
+    def attempt(self, store, key, targets, notice, image=None, *, activity_group=None, episode_id=None,
+                camera_batch=None, telegram_not_before=0):
         store.ensure_recipients(key, [{'id': target} for target in targets])
         for d in store.recipient_deliveries(key):
             if d['status'] != 'pending':
@@ -191,6 +192,8 @@ class Notifications:
             if d['next_try'] > time.time():
                 continue
             provider, address = target
+            if provider is self.telegram and time.time() < telegram_not_before:
+                continue
             if (activity_group and provider is self.telegram
                     and store.activity_delivered(activity_group, key, d['recipient'], episode_id, audible=not notice.silent)):
                 store.recipient_result(key, d['recipient'], 'grouped')
@@ -228,10 +231,19 @@ class Notifications:
             return None
         if event['activity_group']:
             return event['activity_group']
-        history = store.correlation_events(before=event['created'])
-        for group in preview(history, limit=None, include_single=True):
+        now = time.time()
+        history = store.correlation_events(before=min(now, event['created'] + PERSON_SETTLE_SECONDS))
+        for group in preview([row for row in history if row['created'] <= event['created']],
+                             limit=None, include_single=True):
             for member in group['events']:
                 if member['id'] == event['id']:
+                    if group['id'] == event['id'] and event['label'] == 'person':
+                        corroborated, waiting = corroborated_person_group(event, history)
+                        if corroborated:
+                            return store.assign_activity_group(
+                                event['id'], corroborated, 'Continuing activity corroborated by another camera')
+                        if waiting and now < event['created'] + PERSON_SETTLE_SECONDS:
+                            return None
                     return store.assign_activity_group(event['id'], group['id'], member['reason'])
         return None
 
@@ -262,18 +274,25 @@ class Notifications:
                 caption += f'\nDelivered {int(age)} seconds after detection.'
             notice = Notice('event', key, event['created'], caption, mode=='silent', event)
             targets = self.targets()
-            group = self.group_for(store, event) if any(
+            telegram_enabled = any(
                 provider is self.telegram for provider, _ in targets.values()
-            ) else None
+            )
+            group = self.group_for(store, event) if telegram_enabled else None
+            deadline = event['created'] + PERSON_SETTLE_SECONDS
+            checking = telegram_enabled and event['label'] == 'person' and group is None and time.time() < deadline
             episode = store.episode_for(key, group) if group else None
             results = self.attempt(store, key, targets, notice,
                                    lambda: (self.settings.path/'events'/event['snapshot']).read_bytes(),
-                                   activity_group=group, episode_id=episode)
+                                   activity_group=group, episode_id=episode,
+                                   telegram_not_before=deadline if checking else 0)
             waiting = [d for d in results if d['status']=='pending']
             telegram_waiting = [d for d in waiting if targets[d['recipient']][0] is self.telegram]
             self.bot.last_delivery_error = telegram_waiting[0]['error'] if telegram_waiting else None
             sent = sum(d['status']=='sent' for d in results)
             if waiting:
+                if checking:
+                    store.defer_event(key, deadline, 'Checking another camera for continuing activity')
+                    continue
                 store.mark(key, 'pending', f'Delivered to {sent}/{len(results)} destinations; retrying: {waiting[0]["error"]}',
                            retry_in=max(1, min(d['next_try'] for d in waiting)-time.time()))
             else:

@@ -2,7 +2,9 @@
 
 Open **Activity → Activity groups** to see related person and vehicle events.
 Each entry shows its camera, time and reason and links to that view's replay.
-Telegram sends an immediate alert per episode to each account. A later
+Telegram sends an alert per episode to each account. A first alert is immediate;
+a likely person return can wait up to four seconds for another camera to
+corroborate its existing group. A later
 event can add one audible alert if the first was silent and its camera rules
 request sound. A repeat is skipped only after Telegram accepted an equivalent
 alert for that account.
@@ -29,6 +31,15 @@ already delivered group even if it started tracking that person earlier.
   that links the two tracks can start a fresh episode, even in similar clothes.
   Overlapping people stay separate except for very brief overlaps with
   near-identical detections, which can be treated as track fragments.
+- **Later-confirmed views.** A person returning within two minutes to a similar
+  position and appearance can briefly wait if the old group was observed
+  within the last minute. Joining requires a simultaneous second view that
+  independently continues that group and agrees with an established camera
+  route. Timing alone, colour conflicts, co-visible competing people and
+  ambiguous groups cannot provide this corroboration. If it is missing after
+  four seconds from detection, the new alert proceeds. The deadline survives
+  restarts, other notification providers do not wait, and an account that
+  missed the first alert still receives this one. Existing group IDs stay fixed.
 - **Across cameras.** Similar appearance supports longer transitions.
   Repeated, independently corroborated transitions can establish a route
   based on positions in both views, without preconfigured camera pairs.
