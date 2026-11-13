@@ -26,9 +26,12 @@ already delivered group even if it started tracking that person earlier.
 
 - **Same camera.** Compare the last observed position with where the next
   track began, along with its position and coarse colour at confirmation.
-  Look for returns to the same area or a short tracking gap along the path.
-  A person who reappears after more than 60 seconds without an observation
-  that links the two tracks can start a fresh episode, even in similar clothes.
+  A low-confidence person detection can briefly continue an already confirmed
+  track when there is a unique spatial match. A return after up to two minutes
+  out of view can join a group from the last ten minutes when the person
+  retraces the path in the same camera and upper and lower clothing match
+  at two distinct positions. An overlapping person or more than one matching
+  group prevents this association. The local samples exclude the face.
   Overlapping people stay separate except for very brief overlaps with
   near-identical detections, which can be treated as track fragments.
 - **Later-confirmed views.** A person returning within two minutes to a similar
@@ -54,6 +57,8 @@ already delivered group even if it started tracking that person earlier.
   verified movement is tracked separately from visibility. Strongly similar vehicles can be linked
   when a maneuver continues in another view. Older recordings can extend
   a short return to a view already in the group if the appearances agree.
+  A vehicle that starts moving shortly after a person's last two observations
+  at that vehicle can join the person's episode in the same view.
 - **Long activities.** Ordinary groups span up to five minutes, or ten
   minutes for people with strong matches. With corroborated continuity a
   group can span up to 30 minutes. On the same camera, a person needs a

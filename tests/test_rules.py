@@ -106,6 +106,24 @@ def test_occlusion_does_not_duplicate_alert():
     assert not t.update([detection(x=.21)],5,[])
 
 
+def test_weak_person_detections_only_continue_a_confirmed_overlapping_track_briefly():
+    tracker = Tracker()
+    low = detection(x=.21, score=.38)
+    for tick in range(3):
+        assert not tracker.update([], tick, [], weak_people=[low])
+    assert not tracker.tracks
+    for tick in range(3, 6):
+        alerts = tracker.update([detection()], tick, [], window=3.5)
+    track = tracker.tracks[alerts[0]['track_id']]
+    track.event_id = 'person'
+    for tick in (6, 7, 8, 9):
+        assert not tracker.update([], tick, [], weak_people=[low, detection(x=.75, score=.4)])
+    assert len(tracker.tracks) == 1
+    assert track.last == 8
+    assert track.last_strong == 5
+    assert len(track.observations) < 3
+
+
 def test_polygon():
     assert inside((.5,.5),[])
     assert inside((.5,.5),[[0,0],[1,0],[1,1],[0,1]])

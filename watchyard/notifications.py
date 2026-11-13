@@ -14,6 +14,7 @@ import requests
 from .policy import decision
 from .correlation import LABELS, PERSON_SETTLE_SECONDS, corroborated_person_group, preview
 from .health import camera_message
+from .person_path import retraced_person_group
 from .telegram import Telegram, TelegramAPIError, keyboard
 
 
@@ -233,13 +234,19 @@ class Notifications:
             return event['activity_group']
         now = time.time()
         history = store.correlation_events(before=min(now, event['created'] + PERSON_SETTLE_SECONDS))
+        # The pending row may have been fetched before the last analysis frame.
+        event = next((row for row in history if row['id'] == event['id']), event)
         for group in preview([row for row in history if row['created'] <= event['created']],
                              limit=None, include_single=True):
             for member in group['events']:
                 if member['id'] == event['id']:
                     if group['id'] == event['id'] and event['label'] == 'person':
                         corroborated, waiting = corroborated_person_group(event, history)
-                        if corroborated:
+                        retraced = retraced_person_group(event, history)
+                        if retraced and (not corroborated or retraced == corroborated):
+                            return store.assign_activity_group(
+                                event['id'], retraced, 'Matching clothing on a retraced path in the same view')
+                        if corroborated and not retraced:
                             return store.assign_activity_group(
                                 event['id'], corroborated, 'Continuing activity corroborated by another camera')
                         if waiting and now < event['created'] + PERSON_SETTLE_SECONDS:

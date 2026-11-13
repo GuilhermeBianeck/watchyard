@@ -37,7 +37,8 @@ class Store:
             observations INTEGER NOT NULL, dwell_seconds REAL NOT NULL)""")
         self.db.execute('CREATE INDEX IF NOT EXISTS incident_assessed_at ON incident_assessments(assessed_at DESC)')
         for table, additions in {
-            'events': [('recent_colors', 'TEXT'), ('last_motion', 'REAL'), ('episode_id', 'TEXT'), ('exit_vector', 'TEXT')],
+            'events': [('recent_colors', 'TEXT'), ('last_motion', 'REAL'), ('episode_id', 'TEXT'),
+                       ('exit_vector', 'TEXT'), ('person_path', 'TEXT')],
             'health_state': [('outage_id', 'TEXT'), ('outage_since', 'REAL')],
             'health_outbox': [('camera_changes', 'TEXT')],
             'recipient_deliveries': [('coverage', 'TEXT'), ('audible', 'INTEGER')],
@@ -54,30 +55,32 @@ class Store:
         self.db.execute('CREATE INDEX IF NOT EXISTS events_episode ON events(episode_id,created)')
         self.db.commit()
 
-    def add(self,camera,label,confidence,snapshot,status='pending',detail='',notify_mode='',*,first_seen=None,last_seen=None,correlation_hint=None,last_motion=None,recent_colors=None):
+    def add(self,camera,label,confidence,snapshot,status='pending',detail='',notify_mode='',*,first_seen=None,last_seen=None,correlation_hint=None,last_motion=None,recent_colors=None,person_path=None):
         key=uuid.uuid4().hex
         with self.lock:
             self.db.execute("""
                 INSERT INTO events (id,created,camera,camera_name,label,confidence,snapshot,status,detail,notify_mode,
-                first_seen,last_seen,correlation_hint,last_motion,recent_colors) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                first_seen,last_seen,correlation_hint,last_motion,recent_colors,person_path) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """, (key,time.time(),camera['id'],camera['name'],label,confidence,snapshot,status,detail,notify_mode,
-                      first_seen,last_seen,correlation_hint,last_motion,recent_colors))
+                      first_seen,last_seen,correlation_hint,last_motion,recent_colors,person_path))
             self.db.commit()
         return key
 
-    def extend_observations(self, event_ids, seen, *, footprints=None, colors=None, moving=(), headings=None):
+    def extend_observations(self, event_ids, seen, *, footprints=None, colors=None, moving=(), headings=None, paths=None):
         if not event_ids:
             return
         footprints = footprints or {}
         colors = colors or {}
         headings = headings or {}
+        paths = paths or {}
         with self.lock:
             self.db.executemany(
                 'UPDATE events SET last_seen=?, last_x=COALESCE(?,last_x), last_y=COALESCE(?,last_y), '
-                'recent_colors=COALESCE(?,recent_colors), last_motion=COALESCE(?,last_motion), exit_vector=? '
+                'recent_colors=COALESCE(?,recent_colors), last_motion=COALESCE(?,last_motion), exit_vector=?, '
+                'person_path=COALESCE(?,person_path) '
                 'WHERE id=? AND last_seen<?',
                 [(seen, *footprints.get(key, (None, None)), colors.get(key), seen if key in moving else None,
-                  headings.get(key), key, seen)
+                  headings.get(key), paths.get(key), key, seen)
                  for key in event_ids],
             )
             self.db.commit()
@@ -114,7 +117,7 @@ class Store:
         with self.lock:
             return [dict(row) for row in self.db.execute(
                 "SELECT id,created,camera,camera_name,label,first_seen,last_seen,feedback,plate,correlation_hint,"
-                "activity_group,activity_reason,last_x,last_y,recent_colors,last_motion,exit_vector "
+                "activity_group,activity_reason,last_x,last_y,recent_colors,last_motion,exit_vector,person_path "
                 "FROM events WHERE created>=? AND created<=? "
                 "AND label IN ('person','car') ORDER BY created DESC,id DESC LIMIT 480",
                 (now-7*86400, now if before is None else before))]

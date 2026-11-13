@@ -1,6 +1,7 @@
 import json
 import time
 
+import pytest
 from fastapi.testclient import TestClient
 
 from watchyard.app import create_app
@@ -81,6 +82,48 @@ def test_same_doorway_and_clothing_after_gap_still_sends_a_new_alert(tmp_path):
     service.notifications.deliver_once(service.store)
     assert [call['event_id'] for call in calls] == [first, visitor]
     assert service.store.event(visitor)['episode_id'] != service.store.event(first)['episode_id']
+
+
+def path(*points, torso=0, legs=13):
+    colors = [[float(i == index) for i in range(18)] for index in (torso, legs)]
+    return json.dumps([[point, .4, *colors, elapsed] for elapsed, point in enumerate(points)])
+
+
+@pytest.mark.parametrize('change', [None, 'different_clothing', 'same_direction', 'long_gap', 'competing_person'])
+def test_retraced_path_requires_two_clothing_matches_and_one_clear_predecessor(tmp_path, change):
+    service, calls = setup(tmp_path)
+    now = time.time() - 170
+    first = add(service, now, 'person')
+    old = path((.2, .7), (.3, .6), (.4, .5))
+    current = path((.4, .5), (.3, .6), (.2, .7), torso=1 if change == 'different_clothing' else 0)
+    if change == 'same_direction':
+        old = current = path((.3, .6), (.34, .56), (.38, .52))
+    if change == 'competing_person':
+        other = add(service, now+80, 'person', point=(.8, .8))
+    service.notifications.deliver_once(service.store)
+    second = add(service, now+(145 if change == 'long_gap' else 85), 'person')
+    with service.store.db:
+        service.store.db.executemany('UPDATE events SET person_path=? WHERE id=?', [(old, first), (current, second)])
+        if change == 'competing_person':
+            service.store.db.execute('UPDATE events SET last_seen=? WHERE id=?', (now+87, other))
+    service.notifications.deliver_once(service.store)
+    assert (second in [call['event_id'] for call in calls]) == (change is not None)
+    assert (service.store.event(second)['episode_id'] == first) == (change is None)
+
+
+@pytest.mark.parametrize('at_car', [True, False])
+def test_car_driving_away_joins_person_episode_with_repeated_observations_at_the_car(tmp_path, at_car):
+    service, calls = setup(tmp_path)
+    now = time.time() - 40
+    person = add(service, now, 'person', point=(.3, .45))
+    car = add(service, now+16, 'car', point=(.4, .96))
+    car_hint = json.dumps({'point': [.4, .96], 'box': [.25, .35, .55, .96]})
+    person_path = path((.31, .45), (.33, .49)) if at_car else path((.1, .4), (.16, .45))
+    with service.store.db:
+        service.store.db.execute('UPDATE events SET person_path=? WHERE id=?', (person_path, person))
+        service.store.db.execute('UPDATE events SET correlation_hint=? WHERE id=?', (car_hint, car))
+    service.notifications.deliver_once(service.store)
+    assert [call['event_id'] for call in calls] == ([person] if at_car else [person, car])
 
 
 def test_confirmed_person_has_two_observations_available_for_immediate_delivery(tmp_path, monkeypatch):

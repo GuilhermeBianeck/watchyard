@@ -110,9 +110,12 @@ class Service:
 
     def analyse_frame(self, camera, camera_config, frame, captured, sequence, config):
         start = time.perf_counter()
-        result = self.model.predict(frame, conf=config['confidence'], classes=[0,2,15,16], imgsz=640, verbose=False, **self.runtime.prediction_options())[0]
+        confidence = config['confidence']
+        result = self.model.predict(frame, conf=min(confidence, .35), classes=[0,2,15,16], imgsz=640,
+                                    verbose=False, **self.runtime.prediction_options())[0]
         h,w = frame.shape[:2]
         detections = []
+        weak_people = []
         for box in result.boxes:
             label = result.names[int(box.cls[0])]
             if label not in camera_config['labels']:
@@ -120,8 +123,14 @@ class Service:
             coords = box.xyxy[0].cpu().tolist()
             bounds = [max(0, min(1, v / (w if i % 2 == 0 else h)))
                       for i, v in enumerate(coords)]
-            if not ignored_box(label, bounds, camera_config):
-                detections.append({'label': label, 'confidence': float(box.conf[0]), 'box': bounds})
+            if ignored_box(label, bounds, camera_config):
+                continue
+            score = float(box.conf[0])
+            detection = {'label': label, 'confidence': score, 'box': bounds}
+            if score >= confidence:
+                detections.append(detection)
+            elif label == 'person':
+                weak_people.append(detection)
         camera.publish_detections(detections, sequence)
         camera.analysed_frames += 1
         camera.inference_ms = round((time.perf_counter()-start)*1000,1)
@@ -129,7 +138,7 @@ class Service:
         tracker = self.trackers[camera_config['id']]
         observed = time.monotonic()
         events = tracker.update(detections, observed, camera_config['zone'],
-                                config['confirmation_frames'], window=window, frame=frame)
+                                config['confirmation_frames'], window=window, frame=frame, weak_people=weak_people)
         for track in tracker.tracks.values():
             if track.label == 'person' and track.first == observed:
                 try:
@@ -155,13 +164,14 @@ class Service:
             footprints={track.event_id: footprint(track.box) for track in observed_tracks if track.label == 'person'},
             colors=colors, moving={track.event_id for track in observed_tracks if track.moved_at == observed},
             headings={track.event_id: json.dumps(track.heading) for track in observed_tracks if track.heading},
+            paths={track.event_id: json.dumps(track.person_path) for track in observed_tracks if track.person_path},
         )
         for event in events:
             track = tracker.tracks[event['track_id']]
             first_seen = captured - (observed - track.first)
             last_motion = captured - (observed - track.moved_at) if track.moved_at is not None else None
             track.event_id = self.record(camera_config,frame,event,config,first_seen=first_seen,last_seen=captured,
-                                         entry_box=track.first_box,last_motion=last_motion,
+                                         entry_box=track.first_box,last_motion=last_motion,person_path=track.person_path,
                                          initial_colors=track.initial_colors if observed - track.first >= .9 else None)
             track.sampled_at = observed
         self.incidents.observe(camera_config, tracker.tracks, config, observed, captured)
@@ -191,7 +201,7 @@ class Service:
         )
 
     def record(self, camera, frame, event, config, *, first_seen=None, last_seen=None, entry_box=None,
-               last_motion=None, initial_colors=None):
+               last_motion=None, initial_colors=None, person_path=None):
         image = frame.copy()
         draw_detection(image,event)
         name = uuid.uuid4().hex+'.jpg'
@@ -214,7 +224,8 @@ class Service:
                                   first_seen=first_seen,last_seen=last_seen,
                                   correlation_hint=activity_hint,
                                   last_motion=last_motion,
-                                  recent_colors=json.dumps(initial_colors) if initial_colors else None)
+                                  recent_colors=json.dumps(initial_colors) if initial_colors else None,
+                                  person_path=json.dumps(person_path) if person_path else None)
         if event['label'] == 'car':
             self.plates.submit(camera, event_id)
         log.info('Confirmed %s on camera %s (%s)',event['label'],camera['id'],status)

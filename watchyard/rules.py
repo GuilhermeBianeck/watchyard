@@ -6,6 +6,7 @@ import cv2
 from numpy import ndarray
 
 from .motion import vehicle_motion
+from .person_path import add_sample, sample_person
 
 VEHICLE_GAP = 5
 
@@ -64,6 +65,8 @@ class Track:
     initial_colors: list | None = None
     heading: tuple | None = None
     vehicle_frame: ndarray | None = field(default=None, repr=False, compare=False)
+    person_path: list = field(default_factory=list, repr=False)
+    last_strong: float | None = None
 
 
 class Tracker:
@@ -71,7 +74,7 @@ class Tracker:
         self.tracks = {}
         self.counter = 0
 
-    def update(self, detections, now, zone, confirmation=3, window=3, *, frame=None):
+    def update(self, detections, now, zone, confirmation=3, window=3, *, frame=None, weak_people=()):
         self.tracks = {k:t for k,t in self.tracks.items() if now-t.last < 8}
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame is not None and any(
             d['label'] == 'car' for d in detections
@@ -95,8 +98,26 @@ class Tracker:
                 matched.add(key)
         continued = self.vehicle_continuations(detections, now, gray, assignments, matched)
         assignments.update(continued)
+        weak = len(detections)
+        detections = [*detections, *weak_people]
+        weak_matches = {}
+        for i in range(weak, len(detections)):
+            box = detections[i]['box']
+            if any(d['label'] == 'person' and iou(d['box'], box) >= .35 for d in detections[:weak]):
+                continue
+            # A low-scoring box can maintain a confirmed track when it closely
+            # overlaps the last position. It cannot start or confirm a track.
+            possible = [key for key, track in self.tracks.items() if key not in matched
+                        and track.label == 'person' and track.event_id and track.last_strong is not None
+                        and now - track.last <= 2.5 and now - track.last_strong <= 3
+                        and iou(track.box, box) >= .35]
+            if len(possible) == 1:
+                weak_matches.setdefault(possible[0], []).append(i)
+        assignments.update({indices[0]: key for key, indices in weak_matches.items() if len(indices) == 1})
         confirmed_tracks = []
         for i, d in enumerate(detections):
+            if i >= weak and i not in assignments:
+                continue
             box = d['box']
             foot = ((box[0]+box[2])/2, box[3])
             if i in assignments:
@@ -112,14 +133,18 @@ class Tracker:
                 t = Track(self.counter, d['label'], box, center(box), now, now, first_box=box)
                 self.tracks[t.id] = t
             t.last, t.box, t.label = now, box, d['label']
+            if i < weak:
+                t.last_strong = now
             if t.label == 'car':
                 t.vehicle_frame = gray
             in_zone = inside(foot, zone)
+            if t.label == 'person' and frame is not None and in_zone:
+                add_sample(t.person_path, sample_person(frame, box, now - t.first))
             # Require repeated observations INSIDE the alert zone.
             t.observations = [v for v in t.observations if now-v[0] < window]
-            if in_zone:
+            if in_zone and i < weak:
                 t.observations.append((now, d['confidence']))
-            else:
+            elif not in_zone:
                 t.observations.clear()
             t.displacement = max(t.displacement, math.dist(t.origin, center(box)))
             confirmed = len(t.observations) >= confirmation
